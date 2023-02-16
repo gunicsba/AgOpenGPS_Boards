@@ -105,12 +105,14 @@ unsigned int portMy = 5120;             // port of this module
 unsigned int AOGNtripPort = 2233;       // port NTRIP data from AOG comes in
 unsigned int AOGAutoSteerPort = 8888;   // port Autosteer data from AOG comes in
 unsigned int portDestination = 9999;    // Port of AOG that listens
+unsigned int AOGHydraulicPort = 5123;     // Machine port is 5123
 char Eth_NTRIP_packetBuffer[512];       // buffer for receiving ntrip data
 
 // An EthernetUDP instance to let us send and receive packets over UDP
 EthernetUDP Eth_udpPAOGI;     //Out port 5544
 EthernetUDP Eth_udpNtrip;     //In port 2233
 EthernetUDP Eth_udpAutoSteer; //In & Out Port 8888
+EthernetUDP Eth_udpHydraulic;   //In port 5123
 
 IPAddress Eth_ipDestination;
 #endif // ARDUINO_TEENSY41
@@ -263,6 +265,9 @@ void setup()
   
   Serial.println("\r\nStarting Ethernet...");
   EthernetStart();
+
+  Serial.println("\r\nStarting Hydraulics...");
+  HydraulicSetup();
 
   Serial.println("\r\nStarting IMU...");
   //test if CMPS working

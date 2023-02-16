@@ -227,12 +227,14 @@ void autosteerSetup()
     EEPROM.put(10, steerSettings);
     EEPROM.put(40, steerConfig);
     EEPROM.put(60, networkAddress);    
+    hydraulicConfigEprom(true);
   }
   else
   {
     EEPROM.get(10, steerSettings);     // read the Settings
     EEPROM.get(40, steerConfig);
     EEPROM.get(60, networkAddress); 
+    hydraulicConfigEprom(false);
   }
 
   steerSettingsInit();
@@ -699,7 +701,11 @@ void ReceiveUdp()
                  SendUdp(helloFromIMU, sizeof(helloFromIMU), Eth_ipDestination, portDestination); 
                 }
             }
-
+            else if (autoSteerUdpData[3] == 239 || autoSteerUdpData[3] == 238 || autoSteerUdpData[3] == 236)  //machine data
+            {
+                //Serial.println("Autosteer got some 236/238/239 machine data forwarding to Hydraulics!");
+                hydraulicLoop(autoSteerUdpData);
+            }
             else if (autoSteerUdpData[3] == 201)
             {
              //make really sure this is the subnet pgn

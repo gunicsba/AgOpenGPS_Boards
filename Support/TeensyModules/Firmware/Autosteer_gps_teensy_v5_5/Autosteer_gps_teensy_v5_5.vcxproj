@@ -88,6 +88,12 @@
     <ClInclude Include="zNMEAParser.h" />
     <ClInclude Include="__vm\.Autosteer_gps_teensy_v5_5.vsarduino.h" />
   </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="MachineHydraulicLift.ino">
+      <FileType>CppCode</FileType>
+      <DeploymentContent>true</DeploymentContent>
+    </ClCompile>
+  </ItemGroup>
   <PropertyGroup>
     <DebuggerFlavor>VisualMicroDebugger</DebuggerFlavor>
   </PropertyGroup>

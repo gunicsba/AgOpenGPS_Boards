@@ -69,5 +69,12 @@ void EthernetStart()
     Serial.print("Ethernet AutoSteer UDP listening to & send from port: ");
     Serial.println(AOGAutoSteerPort);
   }
+
+  // init UPD Port getting Hydraulic data from AOG
+  if (Eth_udpHydraulic.begin(AOGHydraulicPort)) // AOGHydraulicPortipPort
+  {
+    Serial.print("Ethernet Hydraulic UDP listening on port: ");
+    Serial.println(AOGHydraulicPort);
+  }
  #endif
 }
