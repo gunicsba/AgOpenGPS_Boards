@@ -20,33 +20,14 @@
 
 //These are the pins available on the AIO boards AMPSEAL:
 #define HYDRAULIC_LIFT_OR_UP 26 //A12 was: Hyd_up Used to lift up the hydraulics
-#define HYDRAULIC_LIFT_OR_UP_DEFAULT false 
 #define HYDRAULIC_LOWER_OR_DOWN 27//A13 was: Hyd_down Used to lower the hydraulics 
-#define HYDRAULIC_LOWER_OR_DOWN_DEFAULT false
 #define HYDRAULIC_TRAMLINE 38 //A14
-#define HYDRAULIC_TRAMLINE_DEFAULT false
 
 //
 
 #include <Wire.h>
 #include <EEPROM.h>
 
-#include <IPAddress.h>
-
-#ifdef ARDUINO_TEENSY41
-// ethernet
-#include <NativeEthernet.h>
-#include <NativeEthernetUdp.h>
-#endif
-
-#ifdef ARDUINO_TEENSY41
-//uint8_t Ethernet::buffer[200]; // udp send and receive buffer
-//uint8_t hydraulicUdpData[UDP_TX_PACKET_MAX_SIZE];  // Buffer For Receiving UDP Data
-#endif
-
-  ////////////////// User Settings /////////////////////////  
-#define HYDRAULIC_LIFT_OR_UP 26 //A12 was: Hyd_up Used to lift up the hydraulics
-#define HYDRAULIC_LOWER_OR_DOWN 27//A13 was: Hyd_down Used to lower the hydraulics 
 
 
 
@@ -93,9 +74,10 @@
       pinMode(HYDRAULIC_LIFT_OR_UP, OUTPUT);
       pinMode(HYDRAULIC_LOWER_OR_DOWN, OUTPUT);
       pinMode(HYDRAULIC_TRAMLINE, OUTPUT);
-      digitalWrite(HYDRAULIC_LIFT_OR_UP, HYDRAULIC_LIFT_OR_UP_DEFAULT);
-      digitalWrite(HYDRAULIC_LOWER_OR_DOWN, HYDRAULIC_LOWER_OR_DOWN_DEFAULT); //TODO was isLower
-      digitalWrite(HYDRAULIC_TRAMLINE, HYDRAULIC_TRAMLINE_DEFAULT);
+      digitalWrite(HYDRAULIC_LIFT_OR_UP, hydConfig.isRelayActiveHigh);
+      digitalWrite(HYDRAULIC_LOWER_OR_DOWN, hydConfig.isRelayActiveHigh);
+      digitalWrite(HYDRAULIC_TRAMLINE, hydConfig.isRelayActiveHigh);
+
       Serial.println("Hydraulics are ready!");
       Serial.println("Active High: ");
       Serial.print(hydConfig.isRelayActiveHigh);
