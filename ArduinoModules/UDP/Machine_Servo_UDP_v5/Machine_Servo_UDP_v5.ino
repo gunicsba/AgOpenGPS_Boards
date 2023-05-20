@@ -433,7 +433,6 @@ void SetRelays(void)
     gpsSpeed *= 3.61111;
     //tone(13, gpsSpeed);
 
-    Serial.println("Load the current pgn relay state - Sections");
     //Load the current pgn relay state - Sections
     for (uint8_t i = 0; i < 8; i++)
     {
