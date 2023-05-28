@@ -76,19 +76,19 @@ uint8_t pin[] = { 1,2,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 };
 //read value from Machine data and set 1 or zero according to list
 uint8_t relayState[] = { 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 };
 
-///////////Régler ici la position d'ouverture, fermeture et neutre de vos servotmoteur (dans l'orde de 1 à 16)/////////////
-uint8_t positionOpen[] = { 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15 };   //position ouvert en degré
-uint8_t positionNeutral[] = { 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90 };   //position neutre en degré
-uint8_t positionClosed[] = { 155,155,155,155,155,155,155,155,155,155,155,155,155,155,155,155 };   //position fermé en degré
-#define TIME_RETURN_NEUTRAL 0 //temps de retour au neutre en cycle 10 = 1000ms //0 = pas de retour au neutre et trop court pas le temps d'aller à la position demandée!
+///////////Rï¿½gler ici la position d'ouverture, fermeture et neutre de vos servotmoteur (dans l'orde de 1 ï¿½ 16)/////////////
+uint8_t positionOpen[] = { 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15 };   //position ouvert en degrï¿½
+uint8_t positionNeutral[] = { 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90 };   //position neutre en degrï¿½
+uint8_t positionClosed[] = { 155,155,155,155,155,155,155,155,155,155,155,155,155,155,155,155 };   //position fermï¿½ en degrï¿½
+#define TIME_RETURN_NEUTRAL 0 //temps de retour au neutre en cycle 10 = 1000ms //0 = pas de retour au neutre et trop court pas le temps d'aller ï¿½ la position demandï¿½e!
 
-#define ANGLE_MIN 0
-#define ANGLE_MAX 180
+#define ANGLE_MIN 180
+#define ANGLE_MAX 0
 
-//Réglage des servomoteurs Attention les positions max et min doivent être définies au préalable par vous même pour vos servomoteurs.
+//Rï¿½glage des servomoteurs Attention les positions max et min doivent ï¿½tre dï¿½finies au prï¿½alable par vous mï¿½me pour vos servomoteurs.
 #define SERVO_MIN 90
 #define SERVO_MAX 540
-#define SERVO_FREQ 50 //Généralement par defaut 50hz pour les SG90
+#define SERVO_FREQ 50 //Gï¿½nï¿½ralement par defaut 50hz pour les SG90
 
 #include <Wire.h>
 #include <Adafruit_PWMServoDriver.h>
@@ -154,6 +154,12 @@ void setup()
         EEPROM.get(50, networkAddress);
     }
 
+    pwm.begin();
+    pwm.setPWMFreq(SERVO_FREQ);
+
+    delay(50); 
+    switchRelaisOff();
+
     if (ether.begin(sizeof Ethernet::buffer, mymac, CS_Pin) == 0)
         Serial.println(F("Failed to access Ethernet controller"));
 
@@ -179,12 +185,7 @@ void setup()
     //register to port 8888
     ether.udpServerListenOnPort(&udpSteerRecv, 8888);
 
-    pwm.begin();
-    pwm.setPWMFreq(SERVO_FREQ);
-
     delay(200); //wait for IO chips to get ready
-    switchRelaisOff();
-
     Serial.println("Setup complete, waiting for AgOpenGPS");
 
 }
@@ -211,70 +212,12 @@ void loop()
 
         if (watchdogTimer > 20)
         {
-            if (aogConfig.isRelayActiveHigh) {
-                relayLo = 255;
-                relayHi = 255;
-            }
-            else {
-                relayLo = 0;
-                relayHi = 0;
-            }
+            switchRelaisOff();
         }
-
-        //hydraulic lift
-
-        if (hydLift != lastTrigger && (hydLift == 1 || hydLift == 2))
-        {
-            lastTrigger = hydLift;
-            lowerTimer = 0;
-            raiseTimer = 0;
-
-            //200 msec per frame so 5 per second
-            switch (hydLift)
-            {
-                //lower
-            case 1:
-                lowerTimer = aogConfig.lowerTime * 5;
-                break;
-
-                //raise
-            case 2:
-                raiseTimer = aogConfig.raiseTime * 5;
-                break;
-            }
+        else {
+            //section relays
+            SetRelays();
         }
-
-        //countdown if not zero, make sure up only
-        if (raiseTimer)
-        {
-            raiseTimer--;
-            lowerTimer = 0;
-        }
-        if (lowerTimer) lowerTimer--;
-
-        //if anything wrong, shut off hydraulics, reset last
-        if ((hydLift != 1 && hydLift != 2) || watchdogTimer > 10) //|| gpsSpeed < 2)
-        {
-            lowerTimer = 0;
-            raiseTimer = 0;
-            lastTrigger = 0;
-        }
-
-        if (aogConfig.isRelayActiveHigh)
-        {
-            isLower = isRaise = false;
-            if (lowerTimer) isLower = true;
-            if (raiseTimer) isRaise = true;
-        }
-        else
-        {
-            isLower = isRaise = true;
-            if (lowerTimer) isLower = false;
-            if (raiseTimer) isRaise = false;
-        }
-
-        //section relays
-        SetRelays();
 
         //checksum
         int16_t CK_A = 0;
@@ -486,7 +429,9 @@ void SetRelays(void)
 
 void switchRelaisOff() {  //that are the relais, switch all off
     for (count = 0; count < NUM_OF_SECTIONS; count++) {
-        setSection(count, false);
+        lastPositionMove[count] = false; 
+        setSection(count, true); 
+        //setPosition(count, positionOpen[count]);
     }
     onLo = onHi = 0;
     offLo = offHi = 0b11111111;
@@ -524,5 +469,11 @@ void returnNeutralPosition() {
 
 void setPosition(uint8_t section, uint16_t angle) {
     uint16_t t_position = map(angle, ANGLE_MIN, ANGLE_MAX, SERVO_MIN, SERVO_MAX);
+    Serial.print("SetPosition: ");
+    Serial.print(section+1);
+    Serial.print(" ");
+    Serial.print(angle);
+    Serial.print(" ");
+    Serial.println(t_position);
     pwm.setPWM(section, 0, t_position);
 }
