@@ -231,12 +231,14 @@ void autosteerSetup()
     EEPROM.put(10, steerSettings);
     EEPROM.put(40, steerConfig);
     EEPROM.put(60, networkAddress);    
+    hydraulicConfigEprom(true);
   }
   else
   {
     EEPROM.get(10, steerSettings);     // read the Settings
     EEPROM.get(40, steerConfig);
     EEPROM.get(60, networkAddress); 
+    hydraulicConfigEprom(false);
   }
 
   steerSettingsInit();
@@ -760,6 +762,11 @@ void ReceiveUdp()
                     //off to AOG
                     SendUdp(scanReply, sizeof(scanReply), ipDest, portDest);
                 }
+            }
+            else if (autoSteerUdpData[3] == 236 || autoSteerUdpData[3] == 238 || autoSteerUdpData[3] == 239)  //machine data
+            {
+                //Serial.println("Autosteer got some 236/238/239 machine data forwarding to Hydraulics!");
+                hydraulicLoop(autoSteerUdpData);
             }
         } //end if 80 81 7F
     }

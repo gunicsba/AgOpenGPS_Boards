@@ -264,6 +264,9 @@ void setup()
   Serial.println("\r\nStarting Ethernet...");
   EthernetStart();
 
+  Serial.println("\r\nStarting Hydraulics...");
+  HydraulicSetup();
+
   Serial.println("\r\nStarting IMU...");
   //test if CMPS working
   uint8_t error;
