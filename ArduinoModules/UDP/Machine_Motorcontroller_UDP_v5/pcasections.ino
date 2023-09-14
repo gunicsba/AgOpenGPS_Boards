@@ -18,7 +18,6 @@ bool lastPositionMove[] = { true,true,true,true, true,true,true,true};
 
 
 void pcasectionsSetup(){
-		Serial.println("");
 		Serial.println("Starting PCA Controller ...");
 		int ErrorCount = 0;
 		while (!PCAFound)
@@ -39,15 +38,21 @@ void pcasectionsSetup(){
     }
 
     delay(50); 
-    switchRelaisOff();
+    switchRelaisOn();
 }
 
-void switchRelaisOff() {  //that are the relais, switch all off
+void switchRelaisOn() {  //that are the relais, switch all off
   if(!PCAFound) return;
-    for (count = 0; count < NUM_OF_SECTIONS; count++) {
-        lastPositionMove[count] = false; 
-        setSection(count, true); 
-        setPosition(count, positionClosed[count]);
+//szakaszok
+//a szakasz "off"-ra kapcsol be a művelőút meg "off"-ra elzárva...
+    for (count = 0; count < 6; count++) {
+      lastPositionMove[count] = true; 
+      setSection(count, false); 
+    }
+//muvelout -> on-ra kell azaz TRUE
+    for(count = 6 ; count < 8; count++) {
+      lastPositionMove[count] = false; 
+      setSection(count, true);
     }
     onLo = onHi = 0;
     offLo = offHi = 0b11111111;
@@ -84,43 +89,55 @@ void returnNeutralPosition() {
         lastTimeSectionMove[count] = tmp;
     }
 }
+String setPosition(int section, int num) {
+    String action = "disable";
+    if(num == -1) action = "off";
+    if(num == 1) action = "on";
+    return sectionHandler(section,action, 4096); 
+}
+String setPosition(int section, String action) {
+    return sectionHandler(section,action, 4096); 
+}
 
-void setPosition(uint8_t section, int8_t mode) {
-  if(!PCAFound) return;
-    uint8_t pin1 = section*2;
-    uint8_t pin2 = pin1+1;
-    Serial.println("");
-    Serial.print("Section ");
-    Serial.print(section);
-    Serial.print(" pin1 ");
-    Serial.print(pin1);
-    Serial.print(" pin2 ");
-    Serial.print(pin2);
-    Serial.print(" mode ");
-    Serial.print(mode);
-    
-    switch(mode) {
-      case -1:
-            setPwmForPin(pin1, 0, 4096); //off
-            setPwmForPin(pin2, 4096, 0); //on
-        break;
-      case 0:
-            setPwmForPin(pin1, 4096, 0); //on
-            setPwmForPin(pin2, 4096, 0); //on
-        break;
-      case 1:
-          setPwmForPin(pin1, 4096, 0); //on
-          setPwmForPin(pin2, 0, 4096); //off
-        break;
-      default: 
-        Serial.println("");
-        Serial.print("Not a valid value to set section! ");
-        Serial.print("Section ");
-        Serial.print(section);
-        Serial.print(" value ");
-        Serial.print(mode);
-        Serial.println("");
+String sectionHandler(int section, String action, int force) {
+    if(force > 4096) force = 4096;
+
+    int pin1 = section * 2;
+    int pin2 = pin1+1;
+
+    String forReturn = "SectionHandler: ";
+    forReturn += section;
+    forReturn += " action: ";
+    forReturn += action;
+    forReturn += " pin1: ";
+    forReturn += pin1;
+    forReturn += " pin2: ";
+    forReturn += pin2;
+
+    if( strcmp(action.c_str(),"off") == 0 ){
+        sectionHandler(pin1, 4096-force, 0); 
+        sectionHandler(pin2, 4096 , 0);
+        forReturn += " pwm is ";
+        forReturn += (4096-force);
+        forReturn += ",0 + 4096,0";
     }
+    if( strcmp(action.c_str(),"on") == 0){
+        sectionHandler(pin1, 4096, 0);
+        sectionHandler(pin2, 4096-force, 0 );
+        forReturn += " pwm is 4096,0 + ";
+        forReturn += (4096-force) ;
+    }
+    if( strcmp(action.c_str(),"disable") == 0){
+        sectionHandler(pin1, 4096, 0);
+        sectionHandler(pin2, 4096, 0);
+        forReturn += " pwm is 4096,0 + 4096,0";
+    }
+//    if(section == 0 || section == 7) Serial.println(forReturn); //DEBUG
+    return forReturn;
+}
+
+void sectionHandler(int pin, int pwm1, int pwm2) {
+    pwm.setPWM(pin, pwm1, pwm2); 
 }
 
 void setPwmForPin(uint8_t pin, int16_t pwmLo, int16_t pwmHi) {
@@ -137,29 +154,17 @@ void setPwmForSection(uint8_t section, short pwm) {
   if(!PCAFound) return;
   uint8_t pin1 = section*2;
   uint8_t pin2 = pin1+1;
-    Serial.println("");
-    Serial.print("Section ");
-    Serial.print(section);
-    Serial.print(" pin1 ");
-    Serial.print(pin1);
-    Serial.print(" pin2 ");
-    Serial.print(pin2);
-    Serial.print(" pwm ");
   if( pwm < 0) { //we need to turn off 1 direction
     setPwmForPin(pin1, 0, 4096); //off
     setPwmForPin(pin2, 0, pwm*-16);
-    Serial.print( pwm*-16 );
   } else if ( pwm == 0) {
     setPwmForPin(pin1, 4096, 0); //on
     setPwmForPin(pin2, 4096, 0); //on
     delay(100);
-    Serial.print(" 0-0 ");
   } else {
     setPwmForPin(pin1, 0, pwm*16);
     setPwmForPin(pin2, 0, 4096); //off
-    Serial.print( pwm*16 );
   }
-  Serial.println("");
 
 }
 

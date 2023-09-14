@@ -60,7 +60,7 @@ void(*resetFunc) (void) = 0;
 
 //ethercard 10,11,12,13 Nano = 10 depending how CS of ENC28J60 is Connected
 #define CS_Pin 10
-#define NUM_OF_SECTIONS 7 //16 relays max for PCA9685                                                             //<-
+#define NUM_OF_SECTIONS 8 //16 relays max for PCA9685                                                             //<-
 
 /*
 * Functions as below assigned to pins
@@ -82,13 +82,7 @@ uint8_t positionNeutral[] = { 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90
 uint8_t positionClosed[] = { 155,155,155,155,155,155,155,155,155,155,155,155,155,155,155,155 };   //position ferm� en degr�
 #define TIME_RETURN_NEUTRAL 0 //temps de retour au neutre en cycle 10 = 1000ms //0 = pas de retour au neutre et trop court pas le temps d'aller � la position demand�e!
 
-#define ANGLE_MIN 180
-#define ANGLE_MAX 0
-
-//R�glage des servomoteurs Attention les positions max et min doivent �tre d�finies au pr�alable par vous m�me pour vos servomoteurs.
-#define SERVO_MIN 90
-#define SERVO_MAX 540
-#define SERVO_FREQ 50 //G�n�ralement par defaut 50hz pour les SG90
+#define SERVO_FREQ 400 //G�n�ralement par defaut 50hz pour les SG90
 
 #include <Wire.h>
 #include <Adafruit_PWMServoDriver.h>
@@ -103,6 +97,7 @@ uint32_t currentTime = LOOP_TIME;
 uint32_t fifthTime = 0;
 uint16_t count = 0;
 uint8_t lastTimeSectionMove[] = { 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 };
+//bool lastPositionMove[] = { false,false,false,false,false,false,false,false,false,false,false,true,true,true,true,true };
 bool lastPositionMove[] = { true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true };
 
 //Comm checks
@@ -137,7 +132,6 @@ void setup()
     //set the baud rate
     Serial.begin(38400);
     //while (!Serial) { ; } // wait for serial port to connect. Needed for native USB
-
     EEPROM.get(0, EEread);              // read identifier
 
     if (EEread != EEP_Ident)   // check on first start and write EEPROM
@@ -154,11 +148,24 @@ void setup()
         EEPROM.get(50, networkAddress);
     }
 
+    Wire.begin();
+    Wire.setClock(400000);
+    delay(10);
     pwm.begin();
     pwm.setPWMFreq(SERVO_FREQ);
 
     delay(50); 
-    switchRelaisOff();
+//    switchRelaisOff();
+
+    pwm.setPWM(0, 0,  0);
+    pwm.setPWM(1, 4096, 0);
+
+    pwm.setPWM(2, 0, 4096);
+    pwm.setPWM(3, 4096, 0);
+
+    pwm.setPWM(4, 0, 4096);
+    pwm.setPWM(5, 0, 4096);
+
 
     if (ether.begin(sizeof Ethernet::buffer, mymac, CS_Pin) == 0)
         Serial.println(F("Failed to access Ethernet controller"));
@@ -212,11 +219,11 @@ void loop()
 
         if (watchdogTimer > 20)
         {
-            switchRelaisOff();
+//            switchRelaisOff();
         }
         else {
             //section relays
-            SetRelays();
+            //SetRelays();
         }
 
         //checksum
@@ -371,21 +378,17 @@ void udpSteerRecv(uint16_t dest_port, uint8_t src_ip[IP_LEN], uint16_t src_port,
 
 void SetRelays(void)
 {
+    Serial.println("SetRelays");
     //pin, rate, duration  130 pp meter, 3.6 kmh = 1 m/sec or gpsSpeed * 130/3.6 or gpsSpeed * 36.1111
     //gpsSpeed is 10x actual speed so 3.61111
     gpsSpeed *= 3.61111;
     //tone(13, gpsSpeed);
 
     //Load the current pgn relay state - Sections
-    for (uint8_t i = 0; i < 8; i++)
+    for (uint8_t i = 0; i < 6; i++)
     {
         relayState[i] = bitRead(relayLo, i);
         setSection(i, relayState[i]); //SERVO!
-    }
-
-    for (uint8_t i = 0; i < 8; i++)
-    {
-        relayState[i + 8] = bitRead(relayHi, i);
     }
 
     // Hydraulics
@@ -395,85 +398,73 @@ void SetRelays(void)
     //Tram
     relayState[18] = bitRead(tramline, 0); //right
     relayState[19] = bitRead(tramline, 1); //left
+    setSection(6, bitRead(tramline, 1));
+    setSection(7, bitRead(tramline, 0));
 
     //GeoStop
     relayState[20] = (geoStop == 0) ? 0 : 1;
-
-    
-    //if (pin[0]) digitalWrite(4, relayState[pin[0] - 1]);
-    //if (pin[1]) digitalWrite(5, relayState[pin[1] - 1]);
-    //if (pin[2]) digitalWrite(6, relayState[pin[2] - 1]);
-    //if (pin[3]) digitalWrite(7, relayState[pin[3] - 1]);
-
-    //if (pin[4]) digitalWrite(8, relayState[pin[4] - 1]);
-    //if (pin[5]) digitalWrite(9, relayState[pin[5] - 1]);
-
-    //if (pin[6]) digitalWrite(10, relayState[pin[6]-1]);
-    //if (pin[7]) digitalWrite(11, relayState[pin[7]-1]);
-
-    //if (pin[8]) digitalWrite(12, relayState[pin[8]-1]);
-    //if (pin[9]) digitalWrite(4, relayState[pin[9]-1]);
-
-    //if (pin[10]) digitalWrite(IO#Here, relayState[pin[10]-1]);
-    //if (pin[11]) digitalWrite(IO#Here, relayState[pin[11]-1]);
-    //if (pin[12]) digitalWrite(IO#Here, relayState[pin[12]-1]);
-    //if (pin[13]) digitalWrite(IO#Here, relayState[pin[13]-1]);
-    //if (pin[14]) digitalWrite(IO#Here, relayState[pin[14]-1]);
-    //if (pin[15]) digitalWrite(IO#Here, relayState[pin[15]-1]);
-    //if (pin[16]) digitalWrite(IO#Here, relayState[pin[16]-1]);
-    //if (pin[17]) digitalWrite(IO#Here, relayState[pin[17]-1]);
-    //if (pin[18]) digitalWrite(IO#Here, relayState[pin[18]-1]);
-    //if (pin[19]) digitalWrite(IO#Here, relayState[pin[19]-1]);
 }
 
 
 void switchRelaisOff() {  //that are the relais, switch all off
+    Serial.println("SwitchRelaisOff");
     for (count = 0; count < NUM_OF_SECTIONS; count++) {
-        lastPositionMove[count] = false; 
+        lastPositionMove[count] = false;
         setSection(count, true); 
         //setPosition(count, positionOpen[count]);
     }
+    delay(100);
     onLo = onHi = 0;
     offLo = offHi = 0b11111111;
 }
 
 void setSection(uint8_t section, bool sectionActive) {
+  int pin1 = section*2;
+  int pin2 = pin1+1;
+  String toPrint = " section: ";
+  toPrint += section;
+  toPrint += " pin1: ";
+  toPrint += pin1;
+  toPrint += " pin2: ";
+  toPrint += pin2;
+  
     if (sectionActive && !lastPositionMove[section]) {
-        setPosition(section, positionOpen[count]);
+        toPrint += " active";
+        pwm.setPWM(pin1, 0, 4096);
+        pwm.setPWM(pin2, 4096, 0);
+        delay(100);
+        pwm.setPWM(pin2, 0, 0);
+        delay(50);
+        pwm.setPWM(pin2, 0, 4096);
+        delay(50);
+        pwm.setPWM(pin1, 0, 0);
+        pwm.setPWM(pin2, 4096, 0);
+        delay(100);
+        pwm.setPWM(pin2, 0, 0);
+        delay(50);
+        pwm.setPWM(pin2, 0, 4096);
+        delay(50);
+        pwm.setPWM(pin1, 4096, 0);
+        pwm.setPWM(pin2, 4096, 0);
+        delay(100);
+        pwm.setPWM(pin2, 0, 0);
+        delay(50);
+        pwm.setPWM(pin2, 0, 4096);
+        delay(50);
+        
+        
+        
         lastPositionMove[section] = true;
         lastTimeSectionMove[section] = 0;
     }
     else if (!sectionActive && lastPositionMove[section]) {
-        setPosition(section, positionClosed[count]);
+        toPrint += " NOT active";
+        pwm.setPWM(pin1, 4096, 0);
+        pwm.setPWM(pin2, 0, 4096);
         lastPositionMove[section] = false;
         lastTimeSectionMove[section] = 0;
+    } else {
+      toPrint += " skipped ";
     }
-}
-
-void returnNeutralPosition() {
-    uint8_t tmp = 0;
-    for (count = 0; count < NUM_OF_SECTIONS; count++) {
-        tmp = lastTimeSectionMove[count];
-        if (tmp != 255) {
-            if (tmp < TIME_RETURN_NEUTRAL) {
-                tmp++;
-            }
-            else {
-                setPosition(count, positionNeutral[count]);
-                tmp = 255;
-            }
-        }
-        lastTimeSectionMove[count] = tmp;
-    }
-}
-
-void setPosition(uint8_t section, uint16_t angle) {
-    uint16_t t_position = map(angle, ANGLE_MIN, ANGLE_MAX, SERVO_MIN, SERVO_MAX);
-    Serial.print("SetPosition: ");
-    Serial.print(section+1);
-    Serial.print(" ");
-    Serial.print(angle);
-    Serial.print(" ");
-    Serial.println(t_position);
-    pwm.setPWM(section, 0, t_position);
+//  Serial.println(toPrint);
 }

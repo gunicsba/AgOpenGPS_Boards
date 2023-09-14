@@ -59,7 +59,7 @@ void(*resetFunc) (void) = 0;
 
 //ethercard 10,11,12,13 Nano = 10 depending how CS of ENC28J60 is Connected
 #define CS_Pin 10
-#define NUM_OF_SECTIONS 7 //16 relays max for PCA9685                                                             //<-
+#define NUM_OF_SECTIONS 8 //16 relays max for PCA9685                                                             //<-
 
 /*
 * Functions as below assigned to pins
@@ -205,12 +205,12 @@ void loop()
 
         if (watchdogTimer > 20)
         {
-            switchRelaisOff();
+            switchRelaisOn(); //open everything so we fail in a good position
         }
         else {
             //section relays
             SetRelays();
-            returnNeutralPosition();
+//            returnNeutralPosition();  //no need
         }
 
         //checksum
@@ -234,16 +234,7 @@ void loop()
 //callback when received packets
 void udpSteerRecv(uint16_t dest_port, uint8_t src_ip[IP_LEN], uint16_t src_port, uint8_t* udpData, uint16_t len)
 {
-    /* IPAddress src(src_ip[0],src_ip[1],src_ip[2],src_ip[3]);
-    Serial.print("dPort:");  Serial.print(dest_port);
-    Serial.print("  sPort: ");  Serial.print(src_port);
-    Serial.print("  sIP: ");  ether.printIp(src_ip);  Serial.println("  end");
-
-    //for (int16_t i = 0; i < len; i++) {
-    //Serial.print(udpData[i],HEX); Serial.print("\t"); } Serial.println(len);
-    */
-
-    if (udpData[0] == 0x80 && udpData[1] == 0x81 && udpData[2] == 0x7F) //Data
+      if (udpData[0] == 0x80 && udpData[1] == 0x81 && udpData[2] == 0x7F) //Data
     {
 
         if (udpData[3] == 239)  //machine data
@@ -305,7 +296,7 @@ void udpSteerRecv(uint16_t dest_port, uint8_t src_ip[IP_LEN], uint16_t src_port,
 
             //save in EEPROM and restart
             EEPROM.put(6, aogConfig);
-            //resetFunc();
+            resetFunc();
         }
 
         else if (udpData[3] == 201)
@@ -364,57 +355,15 @@ void udpSteerRecv(uint16_t dest_port, uint8_t src_ip[IP_LEN], uint16_t src_port,
 
 void SetRelays(void)
 {
-    //pin, rate, duration  130 pp meter, 3.6 kmh = 1 m/sec or gpsSpeed * 130/3.6 or gpsSpeed * 36.1111
-    //gpsSpeed is 10x actual speed so 3.61111
-    gpsSpeed *= 3.61111;
-    //tone(13, gpsSpeed);
-
     //Load the current pgn relay state - Sections
-    for (uint8_t i = 0; i < 8; i++)
+    for (uint8_t i = 0; i < 6; i++)
     {
         relayState[i] = bitRead(relayLo, i);
         setSection(i, relayState[i]); //SERVO!
+        //setSection(i, relayState[i]);
     }
 
-    for (uint8_t i = 0; i < 8; i++)
-    {
-        relayState[i + 8] = bitRead(relayHi, i);
-    }
-
-    // Hydraulics
-    relayState[16] = isLower;
-    relayState[17] = isRaise;
-
-    //Tram
-    relayState[18] = bitRead(tramline, 0); //right
-    relayState[19] = bitRead(tramline, 1); //left
-
-    //GeoStop
-    relayState[20] = (geoStop == 0) ? 0 : 1;
-
+    setSection(7, bitRead(tramline, 0) );
+    setSection(6, bitRead(tramline, 1) );
     
-    //if (pin[0]) digitalWrite(4, relayState[pin[0] - 1]);
-    //if (pin[1]) digitalWrite(5, relayState[pin[1] - 1]);
-    //if (pin[2]) digitalWrite(6, relayState[pin[2] - 1]);
-    //if (pin[3]) digitalWrite(7, relayState[pin[3] - 1]);
-
-    //if (pin[4]) digitalWrite(8, relayState[pin[4] - 1]);
-    //if (pin[5]) digitalWrite(9, relayState[pin[5] - 1]);
-
-    //if (pin[6]) digitalWrite(10, relayState[pin[6]-1]);
-    //if (pin[7]) digitalWrite(11, relayState[pin[7]-1]);
-
-    //if (pin[8]) digitalWrite(12, relayState[pin[8]-1]);
-    //if (pin[9]) digitalWrite(4, relayState[pin[9]-1]);
-
-    //if (pin[10]) digitalWrite(IO#Here, relayState[pin[10]-1]);
-    //if (pin[11]) digitalWrite(IO#Here, relayState[pin[11]-1]);
-    //if (pin[12]) digitalWrite(IO#Here, relayState[pin[12]-1]);
-    //if (pin[13]) digitalWrite(IO#Here, relayState[pin[13]-1]);
-    //if (pin[14]) digitalWrite(IO#Here, relayState[pin[14]-1]);
-    //if (pin[15]) digitalWrite(IO#Here, relayState[pin[15]-1]);
-    //if (pin[16]) digitalWrite(IO#Here, relayState[pin[16]-1]);
-    //if (pin[17]) digitalWrite(IO#Here, relayState[pin[17]-1]);
-    //if (pin[18]) digitalWrite(IO#Here, relayState[pin[18]-1]);
-    //if (pin[19]) digitalWrite(IO#Here, relayState[pin[19]-1]);
 }
