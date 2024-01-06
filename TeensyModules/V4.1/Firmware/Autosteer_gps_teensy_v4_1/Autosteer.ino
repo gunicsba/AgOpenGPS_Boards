@@ -43,6 +43,10 @@
 //Define sensor pin for current or pressure sensor
 #define CURRENT_SENSOR_PIN A17
 #define PRESSURE_SENSOR_PIN A10
+#define JOHNDEERE true
+elapsedMicros dutyTime;
+float dutyTimeCurrent = 0;
+float dutyTimePrev = 0;
 
 #define CONST_180_DIVIDED_BY_PI 57.2957795130823
 
@@ -171,6 +175,12 @@ void steerSettingsInit()
   highLowPerDeg = ((float)(steerSettings.highPWM - steerSettings.lowPWM)) / LOW_HIGH_DEGREES;
 }
 
+void ISRJOHNDEERE(){
+  if(digitalRead(PRESSURE_SENSOR_PIN)) dutyTime = 0;
+  else dutyTimeCurrent = dutyTime;
+  return;
+}
+
 void autosteerSetup()
 {
   //PWM rate settings. Set them both the same!!!!
@@ -203,7 +213,13 @@ void autosteerSetup()
 
   // Disable digital inputs for analog input pins
   pinMode(CURRENT_SENSOR_PIN, INPUT_DISABLE);
-  pinMode(PRESSURE_SENSOR_PIN, INPUT_DISABLE);
+  if( JOHNDEERE ) 
+    pinMode(PRESSURE_SENSOR_PIN, INPUT_DISABLE);
+  else {
+    pinMode(PRESSURE_SENSOR_PIN, INPUT);
+    attachInterrupt(digitalPinToInterrupt(PRESSURE_SENSOR_PIN), ISRJOHNDEERE, CHANGE);
+  }
+    
 
   //set up communication
   Wire1.end();
@@ -338,9 +354,22 @@ void autosteerLoop()
     // Pressure sensor?
     if (steerConfig.PressureSensor)
     {
+      if(JOHNDEERE) {
+        if(dutyTimeCurrent > 5000) {
+          //Something went wrong lets reset it to 0
+          dutyTimePrev = 0;
+          dutyTimeCurrent = 0;
+        } else{
+          sensorSample = dutyTimeCurrent/50;
+          sensorReading = abs(dutyTimePrev - dutyTimeCurrent);
+          dutyTimePrev = dutyTimeCurrent;
+        }
+      } else {
       sensorSample = (float)analogRead(PRESSURE_SENSOR_PIN);
       sensorSample *= 0.25;
       sensorReading = sensorReading * 0.6 + sensorSample * 0.4;
+      }
+
       if (sensorReading >= steerConfig.PulseCountMax)
       {
           steerSwitch = 1; // reset values like it turned off
