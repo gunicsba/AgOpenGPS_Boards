@@ -44,7 +44,7 @@
 #define CURRENT_SENSOR_PIN A17
 #define PRESSURE_SENSOR_PIN A10
 #define JOHNDEERE true
-elapsedMicros dutyTime;
+elapsedMicros dutyTime = 0;
 float dutyTimeCurrent = 0;
 float dutyTimePrev = 0;
 
@@ -175,11 +175,18 @@ void steerSettingsInit()
   highLowPerDeg = ((float)(steerSettings.highPWM - steerSettings.lowPWM)) / LOW_HIGH_DEGREES;
 }
 
-void ISRJOHNDEERE(){
-  if(digitalRead(PRESSURE_SENSOR_PIN)) dutyTime = 0;
-  else dutyTimeCurrent = dutyTime;
+void ISRJOHNDEERERISING(){
+  attachInterrupt(digitalPinToInterrupt(PRESSURE_SENSOR_PIN), ISRJOHNDEEREFALLING, FALLING);
+  dutyTime = 0;
   return;
 }
+
+void ISRJOHNDEEREFALLING(){
+  attachInterrupt(digitalPinToInterrupt(PRESSURE_SENSOR_PIN), ISRJOHNDEERERISING, RISING);
+  dutyTimeCurrent = dutyTime;
+  return;
+}
+
 
 void autosteerSetup()
 {
@@ -214,10 +221,11 @@ void autosteerSetup()
   // Disable digital inputs for analog input pins
   pinMode(CURRENT_SENSOR_PIN, INPUT_DISABLE);
   if( JOHNDEERE ) 
-    pinMode(PRESSURE_SENSOR_PIN, INPUT_DISABLE);
-  else {
+  {
     pinMode(PRESSURE_SENSOR_PIN, INPUT);
-    attachInterrupt(digitalPinToInterrupt(PRESSURE_SENSOR_PIN), ISRJOHNDEERE, CHANGE);
+    attachInterrupt(digitalPinToInterrupt(PRESSURE_SENSOR_PIN), ISRJOHNDEERERISING, RISING);  
+  } else {
+    pinMode(PRESSURE_SENSOR_PIN, INPUT_DISABLE);
   }
     
 
@@ -354,15 +362,31 @@ void autosteerLoop()
     // Pressure sensor?
     if (steerConfig.PressureSensor)
     {
-      if(JOHNDEERE) {
-        if(dutyTimeCurrent > 5000) {
-          //Something went wrong lets reset it to 0
-          dutyTimePrev = 0;
-          dutyTimeCurrent = 0;
-        } else{
-          sensorSample = dutyTimeCurrent/50;
-          sensorReading = abs(dutyTimePrev - dutyTimeCurrent);
+      if(JOHNDEERE){
+        if(dutyTimeCurrent > 500 && dutyTimeCurrent < 4500) 
+        {
+//          Serial.print(" , dutyTimeCurrent: ");
+//          Serial.print(dutyTimeCurrent);
+          //current dutyTime should be between 
+          if(abs(dutyTimeCurrent - dutyTimePrev) < 1000) // if it's more than 2000 we jumped...
+          {
+            sensorSample = abs((double)dutyTimeCurrent-2600)/5; //should make it into a smoother transition around 95 to 5 percent
+//            Serial.print(" , sensorSample: ");
+//            Serial.print(sensorSample);
+           sensorReading = abs( ( abs((double)dutyTimePrev-2600)/5 ) - sensorSample);
+//            Serial.print(" , sensorReading: ");
+//            Serial.println(sensorReading);
+            sensorReading = min(sensorReading,255);
+          } else {
+            sensorReading = 0;
+//            Serial.print(" , sensorReading: ");
+//            Serial.println(sensorReading);
+          }
           dutyTimePrev = dutyTimeCurrent;
+        } else {
+ //         Serial.print(" , dutyTimeCurrent: ");
+ //         Serial.println(dutyTimeCurrent);
+          
         }
       } else {
       sensorSample = (float)analogRead(PRESSURE_SENSOR_PIN);
