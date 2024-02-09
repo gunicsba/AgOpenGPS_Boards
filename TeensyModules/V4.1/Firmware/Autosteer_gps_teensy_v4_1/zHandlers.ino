@@ -152,22 +152,24 @@ void readBNO()
             float t0 = +2.0 * (dqw * dqx + dqy * dqz);
             float t1 = +1.0 - 2.0 * (dqx * dqx + ysqr);
 //            roll = atan2(t0, t1) * RAD_TO_DEG_X_10;
-
+            float temproll;
             if(steerConfig.IsUseY_Axis)
             {
-              roll = asin(t2) * RAD_TO_DEG_X_10;
+              temproll = asin(t2) * RAD_TO_DEG_X_10;
               pitch = atan2(t0, t1) * RAD_TO_DEG_X_10;
             }
             else
             {
               pitch = asin(t2) * RAD_TO_DEG_X_10;
-              roll = atan2(t0, t1) * RAD_TO_DEG_X_10;
+              temproll = atan2(t0, t1) * RAD_TO_DEG_X_10;
             }
             
             if(invertRoll)
             {
-              roll *= -1;
+              temproll *= -1;
             }
+            float rollRatio = hydConfig.user1/100;
+            roll = (roll*(1-rollRatio)) +  (temproll*rollRatio) ;
         }
 }
 
