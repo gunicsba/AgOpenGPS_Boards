@@ -43,6 +43,10 @@
 //Define sensor pin for current or pressure sensor
 #define CURRENT_SENSOR_PIN A17
 #define PRESSURE_SENSOR_PIN A10
+#define JOHNDEERE true
+elapsedMicros dutyTime = 0;
+float dutyTimeCurrent = 0;
+float dutyTimePrev = 0;
 
 #define CONST_180_DIVIDED_BY_PI 57.2957795130823
 
@@ -171,6 +175,19 @@ void steerSettingsInit()
   highLowPerDeg = ((float)(steerSettings.highPWM - steerSettings.lowPWM)) / LOW_HIGH_DEGREES;
 }
 
+void ISRJOHNDEERERISING(){
+  attachInterrupt(digitalPinToInterrupt(PRESSURE_SENSOR_PIN), ISRJOHNDEEREFALLING, FALLING);
+  dutyTime = 0;
+  return;
+}
+
+void ISRJOHNDEEREFALLING(){
+  attachInterrupt(digitalPinToInterrupt(PRESSURE_SENSOR_PIN), ISRJOHNDEERERISING, RISING);
+  dutyTimeCurrent = dutyTime;
+  return;
+}
+
+
 void autosteerSetup()
 {
   //PWM rate settings. Set them both the same!!!!
@@ -203,7 +220,14 @@ void autosteerSetup()
 
   // Disable digital inputs for analog input pins
   pinMode(CURRENT_SENSOR_PIN, INPUT_DISABLE);
-  pinMode(PRESSURE_SENSOR_PIN, INPUT_DISABLE);
+  if( JOHNDEERE ) 
+  {
+    pinMode(PRESSURE_SENSOR_PIN, INPUT);
+    attachInterrupt(digitalPinToInterrupt(PRESSURE_SENSOR_PIN), ISRJOHNDEERERISING, RISING);  
+  } else {
+    pinMode(PRESSURE_SENSOR_PIN, INPUT_DISABLE);
+  }
+    
 
   //set up communication
   Wire1.end();
@@ -338,9 +362,38 @@ void autosteerLoop()
     // Pressure sensor?
     if (steerConfig.PressureSensor)
     {
+      if(JOHNDEERE){
+        if(dutyTimeCurrent > 500 && dutyTimeCurrent < 4500) 
+        {
+//          Serial.print(" , dutyTimeCurrent: ");
+//          Serial.print(dutyTimeCurrent);
+          //current dutyTime should be between 
+          if(abs(dutyTimeCurrent - dutyTimePrev) < 1000) // if it's more than 2000 we jumped...
+          {
+            sensorSample = abs((double)dutyTimeCurrent-2600)/5; //should make it into a smoother transition around 95 to 5 percent
+//            Serial.print(" , sensorSample: ");
+//            Serial.print(sensorSample);
+           sensorReading = abs( ( abs((double)dutyTimePrev-2600)/5 ) - sensorSample);
+//            Serial.print(" , sensorReading: ");
+//            Serial.println(sensorReading);
+            sensorReading = min(sensorReading,255);
+          } else {
+            sensorReading = 0;
+//            Serial.print(" , sensorReading: ");
+//            Serial.println(sensorReading);
+          }
+          dutyTimePrev = dutyTimeCurrent;
+        } else {
+ //         Serial.print(" , dutyTimeCurrent: ");
+ //         Serial.println(dutyTimeCurrent);
+          
+        }
+      } else {
       sensorSample = (float)analogRead(PRESSURE_SENSOR_PIN);
       sensorSample *= 0.25;
       sensorReading = sensorReading * 0.6 + sensorSample * 0.4;
+      }
+
       if (sensorReading >= steerConfig.PulseCountMax)
       {
           steerSwitch = 1; // reset values like it turned off
