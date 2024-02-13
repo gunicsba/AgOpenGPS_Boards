@@ -168,8 +168,10 @@ void readBNO()
             {
               temproll *= -1;
             }
-            float rollRatio = hydConfig.user1/100;
-            roll = (roll*(1-rollRatio)) +  (temproll*rollRatio) ;
+            float rollRatio = hydConfig.user1;
+
+            roll = (roll*(100-rollRatio)) + (temproll*rollRatio) ;
+            roll = roll/100;
         }
 }
 
