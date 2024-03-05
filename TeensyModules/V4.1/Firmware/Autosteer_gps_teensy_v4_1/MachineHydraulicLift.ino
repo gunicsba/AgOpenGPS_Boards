@@ -179,7 +179,7 @@ void hydraulicExecute()
   if (hydLift == hydLiftPrev) return; //nothing changed nothing to do
   hydLiftPrev = hydLift; 
  
-  if (hydLift == 1 && hydConfig.enableToolLift) //raise
+  if (hydLift == 2 && hydConfig.enableToolLift) //raise
   {
       if (hydConfig.user4 == 1) //start lifting we don't care about timing
       {
@@ -188,12 +188,12 @@ void hydraulicExecute()
       }
       else if (hydConfig.user4 == 2) //now we care about timing
       {
-          lowerTimer = triggerPin(HYDRAULIC_LOWER_OR_DOWN, hydConfig.isRelayActiveHigh, 0);
+//          lowerTimer = triggerPin(HYDRAULIC_LOWER_OR_DOWN, hydConfig.isRelayActiveHigh, 0);
           raiseTimer = triggerPin(HYDRAULIC_LIFT_OR_UP, !hydConfig.isRelayActiveHigh, hydConfig.raiseTime);
 //          timedPinOff = triggerPin(HYDRAULIC_TIMED_PIN, true, 1);
       }
   }
-  else if(hydLift == 2 && hydConfig.enableToolLift) //lower
+  else if(hydLift == 1 && hydConfig.enableToolLift) //lower
   {
     if(hydConfig.user4 == 1) //let it down we don't care about timing
     {
@@ -203,7 +203,7 @@ void hydraulicExecute()
     }
     else if (hydConfig.user4 == 2) //now we care about timing
     {
-        raiseTimer = triggerPin(HYDRAULIC_LIFT_OR_UP, hydConfig.isRelayActiveHigh, 0);
+//        raiseTimer = triggerPin(HYDRAULIC_LIFT_OR_UP, hydConfig.isRelayActiveHigh, 0);
         lowerTimer = triggerPin(HYDRAULIC_LOWER_OR_DOWN, !hydConfig.isRelayActiveHigh, hydConfig.lowerTime);
 
 //        timedPinOff = triggerPin(HYDRAULIC_TIMED_PIN, true, 1);
@@ -220,12 +220,12 @@ void hydraulicTimedPins()
 }
 
 int triggerPin(int pin, bool state, int timer) {
-    Serial.print("Trigger Pin ");
+    Serial.print("Trigger Pin: ");
     Serial.print(pin);
-    Serial.print(" - ");
+    Serial.print(" - state: ");
     Serial.print(state);
-    Serial.print(" - ");
-    Serial.print(timer);
+    Serial.print(" - timer: ");
+    Serial.println(timer);
     digitalWrite(pin, state);
     if(timer) return millis() + (1000 * timer);
     return 0;
