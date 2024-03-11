@@ -433,7 +433,7 @@ void autosteerLoop()
 		if (watchdogTimer < WATCHDOG_THRESHOLD)
 		{
 			//Enable H Bridge for IBT2, hyd aux, etc for cytron. Don't care about this for Keya
-			if (!isKeya) {
+			if (true || !isKeya) {
 				if (steerConfig.CytronDriver)
 				{
 					if (steerConfig.IsRelayActiveHigh)
@@ -462,7 +462,7 @@ void autosteerLoop()
 			//we've lost the comm to AgOpenGPS, or just stop request
 			//Disable H Bridge for IBT2, hyd aux, etc for cytron
 			// Don't care about this for Keya
-			if (!isKeya) {
+			if (true || !isKeya) {
 				if (steerConfig.CytronDriver)
 				{
 					if (steerConfig.IsRelayActiveHigh)
