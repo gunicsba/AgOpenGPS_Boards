@@ -163,10 +163,10 @@ void KeyaBus_Receive() {
 			//KeyaCurrentSensorReading = abs((int16_t)((KeyaBusReceiveData.buf[5] << 8) | KeyaBusReceiveData.buf[4]));
 			//if (KeyaCurrentSensorReading > 255) KeyaCurrentSensorReading -= 255;
 			if (KeyaBusReceiveData.buf[4] == 0xFF) {
-				KeyaCurrentSensorReading = (256 - KeyaBusReceiveData.buf[5]) * 20;
+				KeyaCurrentSensorReading = (0.8 * KeyaCurrentSensorReading  ) + ( 0.2 *  (256 - KeyaBusReceiveData.buf[5]) * 20);
 			}
 			else {
-				KeyaCurrentSensorReading = KeyaBusReceiveData.buf[5] * 20;
+				KeyaCurrentSensorReading = (0.8 * KeyaCurrentSensorReading  ) + ( 0.2 * KeyaBusReceiveData.buf[5] * 20);
 			}
 			//if (debugKeya) Serial.println("Heartbeat current is " + String(KeyaCurrentSensorReading));
 		}
