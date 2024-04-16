@@ -127,6 +127,12 @@ byte velocityPWM_Pin = 36;      // Velocity (MPH speed) PWM pin
 #include <Wire.h>
 #include "BNO08x_AOG.h"
 
+//roll moyenne flottante
+#include "RunningAverage.h"
+RunningAverage myRA(7);
+int samples = 0;
+float avg = 0;
+
 //Used to set CPU speed
 extern "C" uint32_t set_arm_clock(uint32_t frequency); // required prototype
 
