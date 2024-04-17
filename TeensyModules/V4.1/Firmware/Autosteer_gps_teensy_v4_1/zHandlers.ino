@@ -156,14 +156,20 @@ void readBNO()
             if(steerConfig.IsUseY_Axis)
             {
               roll = asin(t2) * RAD_TO_DEG_X_10;
+              myRA.addValue(roll);
+              avg = myRA.getAverage();
               pitch = atan2(t0, t1) * RAD_TO_DEG_X_10;
             }
             else
             {
               pitch = asin(t2) * RAD_TO_DEG_X_10;
               roll = atan2(t0, t1) * RAD_TO_DEG_X_10;
+              myRA.addValue(roll);
+              avg = myRA.getAverage();
             }
             
+            roll = avg;
+
             if(invertRoll)
             {
               roll *= -1;
