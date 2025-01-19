@@ -43,7 +43,7 @@
 //Define sensor pin for current or pressure sensor
 #define CURRENT_SENSOR_PIN A17
 #define PRESSURE_SENSOR_PIN A10
-#define JOHNDEERE false
+#define JOHNDEERE true
 elapsedMicros dutyTime = 0;
 float dutyTimeCurrent = 0;
 float dutyTimePrev = 0;
@@ -182,6 +182,7 @@ void ISRJOHNDEERERISING(){
 }
 
 void ISRJOHNDEEREFALLING(){
+  if(dutyTime  < 50) return;
   attachInterrupt(digitalPinToInterrupt(PRESSURE_SENSOR_PIN), ISRJOHNDEERERISING, RISING);
   dutyTimeCurrent = dutyTime;
   return;
@@ -363,7 +364,7 @@ void autosteerLoop()
     if (steerConfig.PressureSensor)
     {
       if(JOHNDEERE){
-        if(dutyTimeCurrent > 500 && dutyTimeCurrent < 4500) 
+        if(dutyTimeCurrent > 100 && dutyTimeCurrent < 4500) 
         {
 //          Serial.print(" , dutyTimeCurrent: ");
 //          Serial.print(dutyTimeCurrent);
@@ -384,8 +385,8 @@ void autosteerLoop()
           }
           dutyTimePrev = dutyTimeCurrent;
         } else {
- //         Serial.print(" , dutyTimeCurrent: ");
- //         Serial.println(dutyTimeCurrent);
+//          Serial.print(" , dutyTimeCurrent else: ");
+//          Serial.println(dutyTimeCurrent);
           
         }
       } else {
