@@ -732,7 +732,7 @@ void ReceiveUdp()
 
 					SendUdp(helloFromAutoSteer, sizeof(helloFromAutoSteer), Eth_ipDestination, portDestination);
 				}
-				if (useBNO08x || useCMPS)
+				if (useBNO08x || useCMPS || useBNO08xRVC)
 				{
 					SendUdp(helloFromIMU, sizeof(helloFromIMU), Eth_ipDestination, portDestination);
 				}

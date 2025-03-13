@@ -36,6 +36,7 @@
 HardwareSerial* SerialGPS = &Serial7;   //Main postion receiver (GGA) (Serial2 must be used here with T4.0 / Basic Panda boards - Should auto swap)
 HardwareSerial* SerialGPS2 = &Serial2;  //Dual heading receiver 
 HardwareSerial* SerialGPSTmp = NULL;
+HardwareSerial* SerialIMU = &Serial5;   //IMU BNO-085
 //HardwareSerial* SerialAOG = &Serial;
 
 const int32_t baudAOG = 115200; 
@@ -131,6 +132,7 @@ byte velocityPWM_Pin = 36;      // Velocity (MPH speed) PWM pin
 
 #include "zNMEAParser.h"
 #include <Wire.h>
+#include "BNO_RVC.h"
 #include "BNO08x_AOG.h"
 
 //roll moyenne flottante
@@ -154,6 +156,12 @@ bool dualReadyRelPos = false;
 // booleans to see if we are using CMPS or BNO08x
 bool useCMPS = false;
 bool useBNO08x = false;
+//Roomba Vac mode for BNO085 and data
+BNO_rvc rvc = BNO_rvc();
+BNO_rvcData bnoData;
+elapsedMillis bnoTimer;
+bool bnoTrigger = false;
+bool useBNO08xRVC = false;
 
 //CMPS always x60
 #define CMPS14_ADDRESS 0x60
@@ -349,6 +357,23 @@ void setup()
           }
           if (useBNO08x) break;
       }
+        SerialIMU->begin(115200);
+        rvc.begin(SerialIMU);
+
+        static elapsedMillis rvcBnoTimer = 0;
+        Serial.println("\r\nChecking for serial BNO08x");
+        while (rvcBnoTimer < 1000)
+        {
+          //check if new bnoData
+          if (rvc.read(&bnoData))
+          {
+            useBNO08xRVC = true;
+            Serial.println("Serial BNO08x Good To Go :-)");
+            imuHandler();
+            break;
+          }
+        }
+        if (!useBNO08xRVC)  Serial.println("No Serial BNO08x not Connected or Found");
   }
 
   delay(100);
@@ -356,6 +381,8 @@ void setup()
   Serial.println(useCMPS);
   Serial.print("useBNO08x = ");
   Serial.println(useBNO08x);
+  Serial.print("useBNO08xRVC = ");
+  Serial.println(useBNO08xRVC);
 
   Serial.println("Right... time for some CANBUS! And, we're dedicated to Keya here");
   CAN_Setup();
@@ -679,6 +706,14 @@ void loop()
     {
       READ_BNO_TIME = systick_millis_count;
       readBNO();
+    }
+
+    //RVC BNO08x
+    if(rvc.read(&bnoData)) useBNO08xRVC = true;
+    if (useBNO08xRVC && bnoTimer > 70 && bnoTrigger)
+    {
+        bnoTrigger = false;
+        imuHandler();   //Get IMU data ready
     }
     
     if (Autosteer_running) autosteerLoop();
