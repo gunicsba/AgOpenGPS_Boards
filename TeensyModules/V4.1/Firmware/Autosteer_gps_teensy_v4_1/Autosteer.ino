@@ -374,10 +374,9 @@ void autosteerLoop()
             sensorSample = abs((double)dutyTimeCurrent-2600)/5; //should make it into a smoother transition around 95 to 5 percent
 //            Serial.print(" , sensorSample: ");
 //            Serial.print(sensorSample);
-           sensorReading = abs( ( abs((double)dutyTimePrev-2600)/5 ) - sensorSample);
+           sensorReading = (min(abs( ( abs((double)dutyTimePrev-2600)/5 ) - sensorSample),255) * 0.6) + (sensorReading * 0.4);
 //            Serial.print(" , sensorReading: ");
 //            Serial.println(sensorReading);
-            sensorReading = min(sensorReading,255);
           } else {
             sensorReading = 0;
 //            Serial.print(" , sensorReading: ");
