@@ -177,14 +177,19 @@ void steerSettingsInit()
 
 void ISRJOHNDEERERISING(){
   attachInterrupt(digitalPinToInterrupt(PRESSURE_SENSOR_PIN), ISRJOHNDEEREFALLING, FALLING);
-  dutyTime = 0;
+  if(digitalRead(PRESSURE_SENSOR_PIN)==0) 
+  {
+    dutyTime = 0;
+  }
   return;
 }
 
 void ISRJOHNDEEREFALLING(){
-  if(dutyTime  < 50) return;
   attachInterrupt(digitalPinToInterrupt(PRESSURE_SENSOR_PIN), ISRJOHNDEERERISING, RISING);
-  dutyTimeCurrent = dutyTime;
+  if(digitalRead(PRESSURE_SENSOR_PIN)==1)
+  {
+    dutyTimeCurrent = dutyTime;
+  }
   return;
 }
 

@@ -26,9 +26,30 @@ char imuRoll[6];
 char imuPitch[6];
 char imuYawRate[6];
 
+char FMIUTC[12];
+char FMIlatitude[15];
+char FMIlongitude[15];
+char FMIaltitude[12];
+float FMIRoll;
+float FMIPitch;
+float FMIYAW;
+float FMIHRMS;
+float FMINSAT;
+float AGEDIFF;
+float NAVMOD;
+
+
 // If odd characters showed up.
 void errorHandler()
 {
+  //nothing at the moment
+}
+
+// If odd characters showed up.
+void errorHandler2()
+{
+  Serial.print("parser2 error: ");
+  Serial.println(parser2.error());
   //nothing at the moment
 }
 
@@ -350,6 +371,95 @@ void BuildNmea(void)
     {
         SerialAOG.write(nmea);  //Always send USB GPS data
     }
+/*
+    if (Ethernet_running)   //If ethernet running send the GPS there
+    {
+        int len = strlen(nmea);
+        Eth_udpPAOGI.beginPacket(Eth_ipDestination, portDestination);
+        Eth_udpPAOGI.write(nmea, len);
+        Eth_udpPAOGI.endPacket();
+    }
+  */
+     strcpy(nmea, "");
+
+    //strcat(nmea, "$PAOGI,");
+    strcat(nmea, "$PANDA,");
+    
+    strcat(nmea, FMIUTC);
+    strcat(nmea, ",");
+
+    float lat = atof(FMIlatitude);
+    float lon = atof(FMIlongitude);
+
+    char FMInmeaLat[15], FMInmeaLon[15];
+    char latDir, lonDir;
+
+    decimalToNMEA(lat, true, FMInmeaLat, &latDir);
+    decimalToNMEA(lon, false, FMInmeaLon, &lonDir);
+
+    strcat(nmea, FMInmeaLat);
+    strcat(nmea, ",");
+
+    strncat(nmea, &latDir, 1);
+    strcat(nmea, ",");
+
+    strcat(nmea, FMInmeaLon);
+    strcat(nmea, ",");
+
+    strncat(nmea, &lonDir, 1);
+    strcat(nmea, ",");
+
+    // 6
+    strcat(nmea, fixQuality);
+    strcat(nmea, ",");
+    char temp[12]; 
+    dtostrf(FMINSAT, 2, 0, temp);
+    strcat(nmea, temp);
+    strcat(nmea, ",");
+
+    strcat(nmea, HDOP);
+    strcat(nmea, ",");
+
+    strcat(nmea, FMIaltitude);
+    strcat(nmea, ",");
+
+    //10
+    dtostrf(AGEDIFF, 4, 1, temp);
+    strcat(nmea, temp);
+    strcat(nmea, ",");
+
+    //11
+    strcat(nmea, speedKnots);
+    strcat(nmea, ",");
+
+    //12
+    dtostrf(FMIYAW*100, 6, 3, temp);
+    strcat(nmea, temp);
+    strcat(nmea, ",");
+
+    //13
+    dtostrf(FMIRoll*500, 3, 0, temp);
+    strcat(nmea, temp);
+    strcat(nmea, ",");
+
+    //14
+    dtostrf(FMIPitch*500, 3, 0, temp);
+    strcat(nmea, temp);
+    strcat(nmea, ",");
+
+    //15
+    strcat(nmea, imuYawRate);
+
+    strcat(nmea, "*");
+
+    CalculateChecksum();
+
+    strcat(nmea, "\r\n");
+
+    if (!passThroughGPS && !passThroughGPS2)
+    {
+        SerialAOG.write(nmea);  //Always send USB GPS data
+    }
 
     if (Ethernet_running)   //If ethernet running send the GPS there
     {
@@ -358,6 +468,7 @@ void BuildNmea(void)
         Eth_udpPAOGI.write(nmea, len);
         Eth_udpPAOGI.endPacket();
     }
+       
 }
 
 void CalculateChecksum(void)
@@ -486,4 +597,39 @@ void VTG_Handler()
   parser.getArg(4, speedKnots);
 
 
+}
+void FMI_Handler()
+{
+  parser2.getArg(0, FMIUTC);
+  parser2.getArg(1, FMIlatitude);
+  parser2.getArg(2, FMIlongitude);
+  parser2.getArg(3, FMIaltitude);
+  parser2.getArg(4, FMIRoll);
+  parser2.getArg(5, FMIPitch);
+  parser2.getArg(6, FMIYAW);
+  parser2.getArg(7, FMIHRMS);
+  parser2.getArg(8, FMINSAT);
+  parser2.getArg(9, AGEDIFF);
+  parser2.getArg(10, NAVMOD);
+}
+
+void decimalToNMEA(float decimalDegrees, bool isLatitude, char *outStr, char *direction) {
+    char dir;
+    if (decimalDegrees < 0) {
+        dir = isLatitude ? 'S' : 'W';
+        decimalDegrees = -decimalDegrees;  // Make it positive for conversion
+    } else {
+        dir = isLatitude ? 'N' : 'E';
+    }
+
+    int degrees = (int)decimalDegrees;
+    float minutes = (decimalDegrees - degrees) * 60.0;
+
+    if (isLatitude) {
+        sprintf(outStr, "%02d%08.8f", degrees, minutes);  // DDMM.MMMMM
+    } else {
+        sprintf(outStr, "%03d%011.8f", degrees, minutes);  // DDDMM.MMMMM
+    }
+
+    *direction = dir;
 }

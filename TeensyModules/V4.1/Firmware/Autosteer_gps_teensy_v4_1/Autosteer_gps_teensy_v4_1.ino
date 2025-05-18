@@ -174,6 +174,9 @@ uint8_t RTKrxbuffer[serial_buffer_size];    //Extra serial rx buffer
 
 /* A parser is declared with 3 handlers at most */
 NMEAParser<2> parser;
+/* A parser is declared with 3 handlers at most */
+NMEAParser<1> parser2;
+
 
 bool isTriggered = false;
 bool blink = false;
@@ -243,13 +246,16 @@ void setup()
   parser.setErrorHandler(errorHandler);
   parser.addHandler("G-GGA", GGA_Handler);
   parser.addHandler("G-VTG", VTG_Handler);
+  // the dash means wildcard
+  parser2.setErrorHandler(errorHandler2);
+  parser2.addHandler("G-FMI", FMI_Handler);
 
   delay(10);
   Serial.begin(baudAOG);
   delay(10);
   Serial.println("Start setup");
 
-  SerialGPS->begin(baudGPS);
+  SerialGPS->begin(115200);
   SerialGPS->addMemoryForRead(GPSrxbuffer, serial_buffer_size);
   SerialGPS->addMemoryForWrite(GPStxbuffer, serial_buffer_size);
 
@@ -591,6 +597,14 @@ void loop()
         }
     }
 
+        // Read incoming nmea from GPS
+    if (SerialGPS2->available())
+    {
+//      char c = SerialGPS2->read();
+//      Serial.print(c);
+            parser2 << SerialGPS2->read();
+    }
+
     udpNtrip();
 
     // Check for RTK Radio
@@ -605,53 +619,6 @@ void loop()
         BuildNmea();
         dualReadyGGA = false;
         dualReadyRelPos = false;
-    }
-
-    // If anything comes in SerialGPS2 RelPos data
-    if (SerialGPS2->available())
-    {
-        uint8_t incoming_char = SerialGPS2->read();  //Read RELPOSNED from F9P
-
-        if (passThroughGPS2)
-        {
-            SerialAOG.write(incoming_char);
-        }
-        else
-        {
-            // Just increase the byte counter for the first 3 bytes
-            if (relposnedByteCount < 4 && incoming_char == ackPacket[relposnedByteCount])
-            {
-                relposnedByteCount++;
-            }
-            else if (relposnedByteCount > 3)
-            {
-                // Real data, put the received bytes in the buffer
-                ackPacket[relposnedByteCount] = incoming_char;
-                relposnedByteCount++;
-            }
-            else
-            {
-                // Reset the counter, becaues the start sequence was broken
-                relposnedByteCount = 0;
-            }
-        }
-    }
-
-    // Check the message when the buffer is full
-    if (relposnedByteCount > 71)
-    {
-        if (calcChecksum())
-        {
-            //if(deBug) Serial.println("RelPos Message Recived");
-            digitalWrite(GPSRED_LED, LOW);   //Turn red GPS LED OFF (we are now in dual mode so green LED)
-            useDual = true;
-            relPosDecode();
-        }
-        /*  else {
-          if(deBug) Serial.println("ACK Checksum Failure: ");
-          }
-        */
-        relposnedByteCount = 0;
     }
 
     //GGA timeout, turn off GPS LED's etc
