@@ -143,6 +143,11 @@ bool dualReadyRelPos = false;
 // booleans to see if we are using CMPS or BNO08x
 bool useCMPS = false;
 bool useBNO08x = false;
+bool useTM171 = false;
+
+elapsedMillis TM171lastData;
+elapsedMillis imuTimer;
+bool imuTrigger = false;
 
 //CMPS always x60
 #define CMPS14_ADDRESS 0x60
@@ -171,6 +176,7 @@ uint8_t GPStxbuffer[serial_buffer_size];    //Extra serial tx buffer
 uint8_t GPS2rxbuffer[serial_buffer_size];   //Extra serial rx buffer
 uint8_t GPS2txbuffer[serial_buffer_size];   //Extra serial tx buffer
 uint8_t RTKrxbuffer[serial_buffer_size];    //Extra serial rx buffer
+
 
 /* A parser is declared with 3 handlers at most */
 NMEAParser<2> parser;
@@ -341,6 +347,17 @@ void setup()
           }
           if (useBNO08x) break;
       }
+
+      TM171setup();
+      delay(100);
+      TM171process();
+      if(TM171lastData <= 80) {
+        Serial.println("Received data from TM171");
+        useTM171 = true;
+        imuHandler();
+      } else {
+        Serial.println("No fresh data from TM171");
+      }
   }
 
   delay(100);
@@ -348,6 +365,8 @@ void setup()
   Serial.println(useCMPS);
   Serial.print("useBNO08x = ");
   Serial.println(useBNO08x);
+  Serial.print("useTM171 = ");
+  Serial.println(useTM171);
 
   Serial.println("\r\nEnd setup, waiting for GPS...\r\n");
 }
@@ -667,6 +686,13 @@ void loop()
     {
       READ_BNO_TIME = systick_millis_count;
       readBNO();
+    }
+
+    TM171process();
+    if(useTM171 && imuTimer > 70 && imuTrigger) 
+    {
+      imuTrigger = false;
+      imuHandler();
     }
     
     if (Autosteer_running) autosteerLoop();
