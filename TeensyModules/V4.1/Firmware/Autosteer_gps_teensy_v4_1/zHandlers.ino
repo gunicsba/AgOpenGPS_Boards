@@ -26,6 +26,8 @@ char imuRoll[6];
 char imuPitch[6];
 char imuYawRate[6];
 
+elapsedMillis badQOStimer;
+
 // If odd characters showed up.
 void errorHandler()
 {
@@ -87,6 +89,55 @@ void GGA_Handler() //Rec'd GGA
       {
             digitalWrite(GPSRED_LED, HIGH);    //Turn red GPS LED ON, we have GGA and must have a IMU     
             digitalWrite(GPSGREEN_LED, LOW);   //Make sure the Green LED is OFF    
+      }
+      if(qos >= 4){
+        digitalWrite(GPSRED_LED, LOW);
+        digitalWrite(GPSGREEN_LED, HIGH);
+      } else if(qos >= 2){
+        digitalWrite(GPSGREEN_LED, blink);
+        digitalWrite(GPSRED_LED, !blink);
+
+
+        if (Ethernet_running && badQOStimer > 15000)   //If ethernet running send the GPS there
+        {
+          badQOStimer = 0;
+                  
+          String message = "IMU (TM171) not ready! Temp: " + String(TemperatureV.fValue) + "C  QoS: " + String(qos);
+          Serial.print("Sending Hardware message!!                  ");
+          Serial.println(message);
+
+          uint8_t hardwareMessage[128] = { 0x80, 0x81, 0x7E, 221 };
+
+          int msgLen = message.length();  // UTF-8 byte count (assuming no extended chars)
+          int totalLength = 7 + msgLen + 1; // header(7) + message + CRC(1)
+
+          hardwareMessage[4] = msgLen + 2;
+          hardwareMessage[5] = 5; //seconds to display
+          hardwareMessage[6] = 0; //color 0 or 1
+          
+          // Copy message bytes into hardwareMessage[7..]
+          message.getBytes(&hardwareMessage[7], msgLen + 1);  // +1 for null-terminator safety
+
+          //checksum
+          int16_t CK_A = 0;
+          for (uint8_t i = 2; i < 7 + msgLen; i++)
+          {
+            CK_A = (CK_A + hardwareMessage[i]);
+          }
+          hardwareMessage[7 + msgLen] = CK_A;  // CRC
+
+           Serial.println("Hardware Message Dump:");
+  for (int i = 0; i < totalLength; i++) {
+    if (i % 16 == 0) Serial.print("\n");
+    Serial.printf("%02X ", hardwareMessage[i]);
+  }
+  Serial.println("\n");
+
+          SendUdp(hardwareMessage, totalLength, Eth_ipDestination, portDestination);
+
+        }
+
+
       }
     }
     else if (useBNO08x || useCMPS)

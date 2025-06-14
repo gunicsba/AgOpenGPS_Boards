@@ -5,7 +5,20 @@ HardwareSerial* SerialImu = &Serial7; // &Serial5 for RVC port
 uint8_t SerialImurxbuffer[serial_buffer_size];    //Extra serial tx buffer
 uint8_t SerialImutxbuffer[serial_buffer_size];    //Extra serial tx buffer
 
-uint8_t ImuData[50];
+//State machine from the almighty ChatGPT
+enum TM171ParseState {
+  WAIT_HEADER_1,
+  WAIT_HEADER_2,
+  WAIT_LENGTH,
+  WAIT_PAYLOAD
+};
+
+TM171ParseState parseState = WAIT_HEADER_1;
+uint8_t packetLength = 0;
+uint8_t payloadIndex = 0;
+bool gotPacket = false;
+
+uint8_t ImuData[64];
 uint8_t ImuDC = 0 ;
 
 union Onion
@@ -18,7 +31,10 @@ Onion YawV;
 Onion RollV;
 Onion PitchV;
 
-#define TM171DEBUG
+Onion TemperatureV;
+uint8_t qos;
+
+//#define TM171DEBUG
 
 void TM171setup() {
   SerialImu->begin(115200); 
@@ -30,67 +46,122 @@ void TM171process() {
   while (SerialImu->available())
   {
     uint8_t temp = SerialImu->read();
-    //head
-    if (temp == 0xAA && ImuDC == 0)
+    switch (parseState) 
     {
-      ImuData[ImuDC] = temp;
-      ImuDC++;
+      case WAIT_HEADER_1:
+        if (temp == 0xAA)
+        {
+          ImuData[0] = temp;
+          parseState = WAIT_HEADER_2;
+        }
+        break;
+
+      case WAIT_HEADER_2:
+        if (temp == 0x55)
+        {
+          ImuData[1] = temp;
+          parseState = WAIT_LENGTH;
+        }
+        else
+        {
+          parseState = WAIT_HEADER_1; //Reset if second byte isn't 0x55
+        }
+        break;
+      
+      case WAIT_LENGTH:
+        packetLength = temp;
+        ImuData[2] = temp;
+        payloadIndex = 3; // We've stored 3 bytes so far
+        parseState = WAIT_PAYLOAD;
+
+        //check for unreasonable lengths
+        if (packetLength + 5 > sizeof(ImuData)) 
+        {
+          parseState = WAIT_HEADER_1;
+          Serial.println("Too big data from TM171!");
+        }
+        break;
+      
+      case WAIT_PAYLOAD:
+        ImuData[payloadIndex++] = temp;
+
+        if (payloadIndex >= packetLength + 5) 
+        {
+          gotPacket = true;
+          parseState = WAIT_HEADER_1;
+        }
+        break;
     }
-    else if (temp == 0x55 && ImuDC == 1)
+    if (gotPacket)
     {
-      ImuData[ImuDC] = temp;
-      ImuDC++;
-    }
-    //package length
-    else if (ImuDC == 2)
-    {
-      ImuData[ImuDC] = temp;
-      ImuDC++;
-    }
-    else if (ImuDC > 2 && ImuDC < (ImuData[2]+5)) //+4 nes 2 jau yra ir 2 crc;
-    {
-      ImuData[ImuDC] = temp;
-      ImuDC++;
-    }
-    else if (ImuDC >= (ImuData[2]+5))
-    {
+      gotPacket = false;
+//      if (GoodCRC(ImuData,packetLength+5))
       if (GoodCRC(ImuData,ImuData[2]+5))
       {
-        RollV.fBytes[0] = ImuData[11];
-        RollV.fBytes[1] = ImuData[12];
-        RollV.fBytes[2] = ImuData[13];
-        RollV.fBytes[3] = ImuData[14];
+        TM171lastData = 0;
+        uint8_t functionCode = ImuData[3]; // Function ID (documented at 4th byte)
+        switch (functionCode)
+        {
+        case 35: //RPY Output
+          RollV.fBytes[0] = ImuData[11];
+          RollV.fBytes[1] = ImuData[12];
+          RollV.fBytes[2] = ImuData[13];
+          RollV.fBytes[3] = ImuData[14];
       
-        PitchV.fBytes[0] = ImuData[15];
-        PitchV.fBytes[1] = ImuData[16];
-        PitchV.fBytes[2] = ImuData[17];
-        PitchV.fBytes[3] = ImuData[18];
+          PitchV.fBytes[0] = ImuData[15];
+          PitchV.fBytes[1] = ImuData[16];
+          PitchV.fBytes[2] = ImuData[17];
+          PitchV.fBytes[3] = ImuData[18];
 
-        YawV.fBytes[0] = ImuData[19];
-        YawV.fBytes[1] = ImuData[20];
-        YawV.fBytes[2] = ImuData[21];
-        YawV.fBytes[3] = ImuData[22];
+          YawV.fBytes[0] = ImuData[19];
+          YawV.fBytes[1] = ImuData[20];
+          YawV.fBytes[2] = ImuData[21];
+          YawV.fBytes[3] = ImuData[22];
       
 #ifdef TM171DEBUG
-        Serial.print("yaw = ");
-        Serial.print(YawV.fValue);
-        Serial.print(" pitch = ");
-        Serial.print(PitchV.fValue);
-        Serial.print(" Roll = ");
-        Serial.println(RollV.fValue);
+          Serial.print("yaw=");
+          Serial.print(YawV.fValue);
+          Serial.print(",pitch=");
+          Serial.print(PitchV.fValue);
+          Serial.print(",Roll=");
+          Serial.println(RollV.fValue);
 #endif
-        TM171lastData = 0;
+        break;
+        
+        case 22: // Status Output
+          TemperatureV.fBytes[0] = ImuData[11];
+          TemperatureV.fBytes[1] = ImuData[12];
+          TemperatureV.fBytes[2] = ImuData[13];
+          TemperatureV.fBytes[3] = ImuData[14];
+          qos = ImuData[17] & 0x07;
+#ifdef TM171DEBUG
+          Serial.print("Temp status:"); Serial.print(TemperatureV.fValue);
+          Serial.print(",QoS:"); Serial.println(qos);
+#endif
+        break;
+        
+        default:
+#ifdef TM171DEBUG
+          Serial.print("Unhandled packet type: ");
+          Serial.println(functionCode, HEX);
+#endif
+        break;
+        }
       }
-      ImuDC = 0;
+       else {
+        Serial.println("CRC was bad :(");
+        Serial.print("Length: "); Serial.println(ImuData[2]);
+        Serial.print("Full len: "); Serial.println(packetLength + 5);
+      }
+      // Reset for next packet
+/*
       ImuData[0] = 0;
       ImuData[1] = 0;
-      ImuData[2] = 0;
-     
-    }
-
-  }
+      ImuData[2] = 0;  
+*/
+    } //gotPacket
+  } //while
 }
-
 
 bool GoodCRC(byte Data[], byte Length)
 {

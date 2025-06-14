@@ -349,7 +349,7 @@ void setup()
       }
 
       TM171setup();
-      delay(100);
+      delay(200);
       TM171process();
       if(TM171lastData <= 80) {
         Serial.println("Received data from TM171");
