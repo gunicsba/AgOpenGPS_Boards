@@ -1,6 +1,6 @@
 //Based on the work of Paulius a.k.a. babtai RTK!
 
-HardwareSerial* SerialImu = &Serial5;
+HardwareSerial* SerialImu = &Serial7; // &Serial5 for RVC port
 
 uint8_t SerialImurxbuffer[serial_buffer_size];    //Extra serial tx buffer
 uint8_t SerialImutxbuffer[serial_buffer_size];    //Extra serial tx buffer
