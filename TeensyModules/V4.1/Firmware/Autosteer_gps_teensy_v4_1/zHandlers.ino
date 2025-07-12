@@ -92,7 +92,10 @@ void GGA_Handler() //Rec'd GGA
       }
       if(qos >= 4){
         digitalWrite(GPSRED_LED, LOW);
-        digitalWrite(GPSGREEN_LED, HIGH);
+        if(qos == 4) 
+          digitalWrite(GPSGREEN_LED, blink);
+        else 
+          digitalWrite(GPSGREEN_LED, HIGH);
       } else if(qos >= 2){
         digitalWrite(GPSGREEN_LED, blink);
         digitalWrite(GPSRED_LED, !blink);
