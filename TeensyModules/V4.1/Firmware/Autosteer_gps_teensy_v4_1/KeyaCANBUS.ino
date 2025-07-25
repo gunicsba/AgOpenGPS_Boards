@@ -119,7 +119,7 @@ void disablefjdSteerTEST() {
 
 
 void SteerKeya(int steerSpeed) {
-	int16_t actualSpeed = map(steerSpeed, -255, 255, -2000, 2000); //TODO
+	int16_t actualSpeed = map(steerSpeed, -255, 255, -5000, 5000); //TODO
 	if (pwmDrive == 0) {
 		disablefjdSteer();
 		//if (debugFjd) Serial.println("pwmDrive zero - disabling");
