@@ -59,7 +59,7 @@ void motorDrive(void)
 	if (isKeya) {
 		if (pwmDrive == 0) {
 			// send disable
-			disableKeyaSteer();
+			disablefjdSteer();
 		} else {
       SteerKeya(pwmDrive);
 		}

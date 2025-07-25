@@ -354,6 +354,7 @@ void autosteerLoop()
 		// Current sensor?
 		if (steerConfig.CurrentSensor)
 		{
+/*
 			if (isKeya) {
 				sensorReading = KeyaCurrentSensorReading;
 				if (KeyaCurrentSensorReading >= steerConfig.PulseCountMax) {
@@ -362,7 +363,8 @@ void autosteerLoop()
 					previous = 0;
 				}
 			}
-			else {
+			else */
+      {
 				sensorSample = (float)analogRead(CURRENT_SENSOR_PIN);
 				sensorSample = (abs(775 - sensorSample)) * 0.5;
 				sensorReading = sensorReading * 0.7 + sensorSample * 0.3;
@@ -478,7 +480,7 @@ void autosteerLoop()
 			}
 
 			pwmDrive = 0; //turn off steering motor
-			if (isKeya) disableKeyaSteer(); // If we lost the connection to AOG, definitely disable steering
+			if (isKeya) disablefjdSteer(); // If we lost the connection to AOG, definitely disable steering
 			motorDrive(); //out to motors the pwm value
 			pulseCount = 0;
 			// Autosteer Led goes back to RED when autosteering is stopped

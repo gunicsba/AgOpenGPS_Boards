@@ -392,7 +392,7 @@ void setup()
 
 void loop()
 {
-    KeyaBus_Receive();
+    fjdBus_Receive();
     if (GGA_Available == false && !passThroughGPS && !passThroughGPS2)
     {
         if (systick_millis_count - PortSwapTime >= 10000)
