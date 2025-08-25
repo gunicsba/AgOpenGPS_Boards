@@ -93,6 +93,7 @@ int8_t PGN_250_Size = sizeof(PGN_250) - 1;
 uint8_t aog2Count = 0;
 float sensorReading;
 float sensorSample;
+elapsedMillis sensorPulseReset;
 
 elapsedMillis gpsSpeedUpdateTimer = 0;
 
@@ -839,6 +840,9 @@ void EncoderFunc()
 {
   if (encEnable)
   {
+    //Reset counter to 0 if there wasn't any activity for 15 seconds
+    if(sensorPulseReset >= 10000 && steerConfig.PulseCountMax >= 3)  pulseCount = 0;
+    sensorPulseReset = 0;
     pulseCount++;
     encEnable = false;
   }
