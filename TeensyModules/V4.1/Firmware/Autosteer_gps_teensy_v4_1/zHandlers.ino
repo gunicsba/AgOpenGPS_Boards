@@ -77,10 +77,10 @@ void GGA_Handler() //Rec'd GGA
        dualReadyGGA = true;
     }
 
-    if (useBNO08xRVC)
+    if (useTM171)
     {
-        bnoTrigger = true;
-        bnoTimer = 0;
+        imuTrigger = true;
+        imuTimer = 0;
 
         BuildNmea();           //Build & send data GPS data to AgIO (Both Dual & Single)
         dualReadyGGA = false;  //Force dual GGA ready false because we just sent it to AgIO based off the IMU data
@@ -101,7 +101,7 @@ void GGA_Handler() //Rec'd GGA
         digitalWrite(GPSGREEN_LED, LOW);   //Make sure the Green LED is OFF     
        }
     }
-    else if (!useBNO08x && !useCMPS && !useDual && !useBNO08xRVC) 
+    else if (!useBNO08x && !useCMPS && !useDual && !useTM171) 
     {
         digitalWrite(GPSRED_LED, blink);   //Flash red GPS LED, we have GGA but no IMU or dual
         digitalWrite(GPSGREEN_LED, LOW);   //Make sure the Green LED is OFF
@@ -195,49 +195,30 @@ void imuHandler()
     int16_t temp = 0;
     if (!useDual)
     {
-        if (useBNO08xRVC)
+        if (useTM171)
         {
-            float angVel;
-
             // Fill rest of Panda Sentence - Heading
-            itoa(bnoData.yawX10, imuHeading, 10);
+            itoa(YawV.fValue*10, imuHeading, 10);
 
-            if (steerConfig.IsUseY_Axis)
+            if (!steerConfig.IsUseY_Axis)
             {
                 // the pitch x100
-                itoa(bnoData.pitchX10, imuPitch, 10);
+                itoa(PitchV.fValue*10, imuPitch, 10);
 
                 // the roll x100
-                itoa(bnoData.rollX10, imuRoll, 10);
+                itoa(RollV.fValue*10, imuRoll, 10);
             }
             else
             {
                 // the pitch x100
-                itoa(bnoData.rollX10, imuPitch, 10);
+                itoa(RollV.fValue*10, imuPitch, 10);
 
                 // the roll x100
-                itoa(bnoData.pitchX10, imuRoll, 10);
+                itoa(PitchV.fValue*10, imuRoll, 10);
             }
 
-            //Serial.print(rvc.angCounter);
-            //Serial.print(", ");
-            //Serial.print(bnoData.angVel);
-            //Serial.print(", ");
-            // YawRate
-            if (rvc.angCounter > 0)
-            {
-                angVel = ((float)bnoData.angVel) / (float)rvc.angCounter;
-                angVel *= 10.0;
-                rvc.angCounter = 0;
-                bnoData.angVel = (int16_t)angVel;
-            }
-            else
-            {
-                bnoData.angVel = 0;
-            }
 
-            itoa(bnoData.angVel, imuYawRate, 10);
-            bnoData.angVel = 0;
+            itoa(0, imuYawRate, 10);
         }
         
         if (useCMPS)
