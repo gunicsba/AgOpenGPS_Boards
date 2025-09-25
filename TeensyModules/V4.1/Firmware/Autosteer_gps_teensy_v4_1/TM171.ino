@@ -103,15 +103,15 @@ void TM171process() {
         switch (functionCode)
         {
         case 35: //RPY Output
-          RollV.fBytes[0] = ImuData[11];
-          RollV.fBytes[1] = ImuData[12];
-          RollV.fBytes[2] = ImuData[13];
-          RollV.fBytes[3] = ImuData[14];
+          PitchV.fBytes[0] = ImuData[11];
+          PitchV.fBytes[1] = ImuData[12];
+          PitchV.fBytes[2] = ImuData[13];
+          PitchV.fBytes[3] = ImuData[14];
       
-          PitchV.fBytes[0] = ImuData[15];
-          PitchV.fBytes[1] = ImuData[16];
-          PitchV.fBytes[2] = ImuData[17];
-          PitchV.fBytes[3] = ImuData[18];
+          RollV.fBytes[0] = ImuData[15];
+          RollV.fBytes[1] = ImuData[16];
+          RollV.fBytes[2] = ImuData[17];
+          RollV.fBytes[3] = ImuData[18];
 
           YawV.fBytes[0] = ImuData[19];
           YawV.fBytes[1] = ImuData[20];
