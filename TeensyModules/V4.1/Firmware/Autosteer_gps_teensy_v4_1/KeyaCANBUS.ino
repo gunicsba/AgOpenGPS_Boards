@@ -22,7 +22,9 @@ uint64_t fjdPGN = 0x201;
 
 bool fjdON = false;
 const bool fjdSafety = false;
-const bool debugFjd = true;
+const bool debugFjd = false;
+elapsedMillis fjdMsgMillis = 0;
+elapsedMillis fjdCANdata = 0;
 /*
 0: 02 == engage trigger cycle see 200h for status!!
 1: speed + direction
@@ -33,6 +35,9 @@ const bool debugFjd = true;
 6: BIT 8: Manual override 01 ON  00 Manual override OFF
 7
 */
+
+uint8_t fjdPreviousStatus = 0xAA;
+char buffer [60];
 
 void keyaSend(uint8_t data[]) {
 	//TODO Use this optimisation function once we're happy things are moving the right way
@@ -64,7 +69,7 @@ void CAN_Setup() {
 //	msgV.buf[7] = 0x20;
 //	Keya_Bus.write(msgV);
 	delay(1000);
-	if (debugFjd) Serial.println("Initialised Keya CANBUS");
+	if (debugFjd) Serial.println("Initialised FJD CANBUS");
 }
 
 bool isPatternMatch(const CAN_message_t& message, const uint8_t* pattern, size_t patternSize) {
@@ -158,11 +163,10 @@ void fjdBus_Receive() {
 
     if (fjdBusReceiveData.id == 0x200) //Generic status
     {
-      Serial.print("Received status:");
-      Serial.println(fjdBusReceiveData.buf[0]);
+      fjdCANdata = 0;
       switch(fjdBusReceiveData.buf[0])
       {
-        case 0x13:
+        case 0x13: //error
           triggerfjdSteer(false); //clear error message
           fjdON = false;
           if (steerConfig.CurrentSensor && fjdSafety) 
@@ -171,17 +175,114 @@ void fjdBus_Receive() {
 					  currentState = 1;
 					  previous = 0;
           }
+          break;
         case 0x00: //ready
           fjdON = false;
           break;
+        case 0x05: //ON also?
         case 0x06: //ON
+        case 0x07: //ON also?
+        case 0x09: //ON also?
           fjdON = true;
           break;
         case 0x08: //Shutting down
           fjdON = false;
           break;
-      }
+        default:
+          fjdON = false;
+          break;
 
+      }
+      snprintf(buffer, sizeof(buffer), "FJD: %s (code %02X) from %s ", fjdStatusName(fjdBusReceiveData.buf[0]), fjdBusReceiveData.buf[0], fjdStatusName(fjdPreviousStatus));
+      if(fjdPreviousStatus != fjdBusReceiveData.buf[0]) {
+        if (debugFjd) sendHardwareMessage(buffer, 1);
+        fjdMsgMillis = 0;
+      } 
+      else {
+        if(fjdMsgMillis > 5000) { //Send last status every 5 second
+          if (debugFjd) sendHardwareMessage(buffer, 1);
+          fjdMsgMillis = 0;
+        }
+      }
+      fjdPreviousStatus = fjdBusReceiveData.buf[0];
+
+
+    } else if (debugFjd){
+            Serial.print(", FJD-Bus"); 
+            Serial.print(", MB: "); Serial.print(fjdBusReceiveData.mb);
+            Serial.print(", ID: 0x"); Serial.print(fjdBusReceiveData.id, HEX );
+            Serial.print(", EXT: "); Serial.print(fjdBusReceiveData.flags.extended );
+            Serial.print(", LEN: "); Serial.print(fjdBusReceiveData.len);
+            Serial.print(", DATA: ");
+            for ( uint8_t i = 0; i < 8; i++ ) 
+            {
+              Serial.print(fjdBusReceiveData.buf[i]); Serial.print(", ");
+            }
+  
+            Serial.println("");
     }
-	}
+  } else if(fjdCANdata > 100) {
+    if(fjdON) {
+      snprintf(buffer, sizeof(buffer), "No CAN data from FJD wheel but it should be ON %s ", fjdStatusName(fjdPreviousStatus));
+    }
+    else {
+      snprintf(buffer, sizeof(buffer), "No CAN data from FJD wheel but it should be OFF %s ", fjdStatusName(fjdPreviousStatus));
+    }
+    if(fjdMsgMillis > 2000) { //Send last status every 5 second
+      sendHardwareMessage(buffer, 2);
+      fjdMsgMillis = 0;
+    }
+    fjdCANdata = 0;
+  }
+}
+
+// Small map from code → human-readable text
+struct FJDStatus { uint8_t code; const char* name; };
+static const FJDStatus FJD_STATUS_MAP[] = {
+  {0x00, "Ready"},
+  {0x03, "ON 3"},
+  {0x05, "ON 5"},
+  {0x06, "ON 6"},
+  {0x07, "ON 7"},
+  {0x09, "? 9 ?"},
+  {0x08, "Shutting down"},
+  {0x13, "Error"},
+};
+
+static const char* fjdStatusName(uint8_t code) {
+  for (auto &e : FJD_STATUS_MAP) if (e.code == code) return e.name;
+
+   // Fallback: print as hex
+  static char buf[20];  // enough for "0xFF\0"
+  snprintf(buf, sizeof(buf), "Unknown 0x%02X", code);
+  return buf; 
+}
+
+void sendHardwareMessage(String message, int seconds) {
+
+          Serial.print("Sending Hardware message!!                  ");
+          Serial.println(message);
+
+          uint8_t hardwareMessage[128] = { 0x80, 0x81, 0x7E, 221 };
+
+          int msgLen = message.length();  // UTF-8 byte count (assuming no extended chars)
+          int totalLength = 7 + msgLen + 1; // header(7) + message + CRC(1)
+
+          hardwareMessage[4] = msgLen + 2;
+          hardwareMessage[5] = seconds; //seconds to display
+          hardwareMessage[6] = 0; //color 0 or 1
+          
+          // Copy message bytes into hardwareMessage[7..]
+          message.getBytes(&hardwareMessage[7], msgLen + 1);  // +1 for null-terminator safety
+
+          //checksum
+          int16_t CK_A = 0;
+          for (uint8_t i = 2; i < 7 + msgLen; i++)
+          {
+            CK_A = (CK_A + hardwareMessage[i]);
+          }
+          hardwareMessage[7 + msgLen] = CK_A;  // CRC
+
+          SendUdp(hardwareMessage, totalLength, Eth_ipDestination, portDestination);
+
 }
