@@ -35,6 +35,8 @@ Onion PitchV;
 Onion TemperatureV;
 uint8_t qos;
 
+bool TM171DataSeen = false;
+
 //#define TM171DEBUG
 
 void TM171setup() {
@@ -100,6 +102,7 @@ void TM171process() {
       if (GoodCRC(ImuData,ImuData[2]+5))
       {
         TM171lastData = 0;
+        TM171DataSeen = true;
         uint8_t functionCode = ImuData[3]; // Function ID (documented at 4th byte)
         switch (functionCode)
         {
@@ -162,6 +165,39 @@ void TM171process() {
 */
     } //gotPacket
   } //while
+}
+
+bool TM171detectOnPort(HardwareSerial* port, uint32_t detectionMs)
+{
+    SerialImu = port;
+    TM171setup();
+
+    TM171DataSeen = false;
+    TM171lastData = 0;
+    parseState = WAIT_HEADER_1;
+    packetLength = 0;
+    payloadIndex = 0;
+    gotPacket = false;
+
+    while (SerialImu->available())
+    {
+        SerialImu->read();
+    }
+
+    delay(200);
+
+    uint32_t start = millis();
+    while (millis() - start < detectionMs)
+    {
+        TM171process();
+        if (TM171DataSeen)
+        {
+            return true;
+        }
+        delay(1);
+    }
+
+    return false;
 }
 
 bool GoodCRC(byte Data[], byte Length)
