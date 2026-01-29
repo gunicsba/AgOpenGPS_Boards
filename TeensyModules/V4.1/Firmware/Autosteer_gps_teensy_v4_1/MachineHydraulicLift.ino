@@ -157,6 +157,12 @@ void hydraulicConfigEprom(bool write)
 
 void hydraulicExecute()
 {
+  //---Fendt K-Bus hitch control (Big Go/Big End buttons)---
+  //This runs regardless of HYDRAULIC_ENABLED to allow K-Bus only operation
+  //Note: 'relay' variable is set in Autosteer.ino from PGN 254 (autoSteerUdpData[11])
+  if (FENDT_KBUS_ENABLED && hydConfig.enableToolLift) {
+    SetRelaysFendt(hydLift, relay, hydConfig.isRelayActiveHigh, hydConfig.enableToolLift);
+  }
 
   if(hydLift == 0 || !hydConfig.enableToolLift) {
     triggerPin(HYDRAULIC_LIFT_OR_UP, hydConfig.isRelayActiveHigh ,0);

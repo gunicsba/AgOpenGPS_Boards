@@ -91,6 +91,24 @@ uint32_t gpsReadyTime = 0;        //Used for GGA timeout
 #include <NativeEthernet.h>
 #include <NativeEthernetUdp.h>
 
+//----Teensy 4.1 CANBus for Fendt K-Bus-----
+#include <FlexCAN_T4.h>
+FlexCAN_T4<CAN1, RX_SIZE_256, TX_SIZE_256> K_Bus;    //K-Bus is CAN1 - Fendt Armrest/Joystick Bus
+
+//Fendt K-Bus variables
+#define FENDT_KBUS_ENABLED true       //Set to false to disable Fendt K-Bus functionality
+bool goDown = false, endDown = false, bitState = false, bitStateOld = false;  //CAN Hitch Control
+byte hydLiftKBus = 0;
+byte goPress[8]   = {0x15, 0x20, 0x06, 0xCA, 0x80, 0x01, 0x00, 0x00};  //press big go
+byte goLift[8]    = {0x15, 0x20, 0x06, 0xCA, 0x00, 0x02, 0x00, 0x00};  //lift big go
+byte endPress[8]  = {0x15, 0x21, 0x06, 0xCA, 0x80, 0x03, 0x00, 0x00};  //press big end
+byte endLift[8]   = {0x15, 0x21, 0x06, 0xCA, 0x00, 0x04, 0x00, 0x00};  //lift big end
+//byte goPress[8]   = {0x15, 0x22, 0x06, 0xCA, 0x80, 0x01, 0x00, 0x00};  //press little go
+//byte goLift[8]    = {0x15, 0x22, 0x06, 0xCA, 0x00, 0x02, 0x00, 0x00};  //lift little go
+//byte endPress[8]  = {0x15, 0x23, 0x06, 0xCA, 0x80, 0x03, 0x00, 0x00};  //press little end
+//byte endLift[8]   = {0x15, 0x23, 0x06, 0xCA, 0x00, 0x04, 0x00, 0x00};  //lift little end
+//----End Fendt K-Bus-----
+
 struct ConfigIP {
     uint8_t ipOne = 192;
     uint8_t ipTwo = 168;
@@ -278,6 +296,9 @@ void setup()
 
   Serial.println("\r\nStarting Hydraulics...");
   HydraulicSetup();
+
+  Serial.println("\r\nStarting Fendt K-Bus...");
+  KBus_setup();
 
   Serial.println("\r\nStarting IMU...");
   //test if CMPS working
@@ -697,6 +718,9 @@ void loop()
     
     if (Autosteer_running) autosteerLoop();
     else ReceiveUdp();
+
+    //Fendt K-Bus receive (for monitoring armrest buttons if needed)
+    KBus_Receive();
     
   if (Ethernet.linkStatus() == LinkOFF) 
   {
