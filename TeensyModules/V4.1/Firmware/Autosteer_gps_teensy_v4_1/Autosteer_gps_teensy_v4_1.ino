@@ -93,7 +93,7 @@ uint32_t gpsReadyTime = 0;        //Used for GGA timeout
 
 //----Teensy 4.1 CANBus for Fendt K-Bus-----
 #include <FlexCAN_T4.h>
-FlexCAN_T4<CAN1, RX_SIZE_256, TX_SIZE_256> K_Bus;    //K-Bus is CAN1 - Fendt Armrest/Joystick Bus
+FlexCAN_T4<CAN3, RX_SIZE_256, TX_SIZE_256> K_Bus;    //K-Bus is CAN1 - Fendt Armrest/Joystick Bus
 
 //Fendt K-Bus variables
 #define FENDT_KBUS_ENABLED true       //Set to false to disable Fendt K-Bus functionality
