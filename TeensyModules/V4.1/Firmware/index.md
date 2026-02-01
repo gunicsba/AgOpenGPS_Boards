@@ -1,8 +1,16 @@
-# Machinery Guide Steer Motor – Reverse Engineering Notes
+# Machinery Guide Steer Motor – Full Reverse Engineering README
 
 Stepper-motor based steering motor by **Machinery Guide**.
 
-This document summarizes CAN traces, wiring, and byte-level decoding of messages observed during calibration and operation.
+This document consolidates:
+- wiring & connectors  
+- CAN message roles  
+- byte-level decoding  
+- PGN-based command structure  
+- steering & calibration logic  
+- automatic steering configuration parameters  
+
+Designed so an AI tool or software implementation can be generated without additional explanation.
 
 ---
 
@@ -40,15 +48,13 @@ This document summarizes CAN traces, wiring, and byte-level decoding of messages
 
 | CAN ID | Direction | Role |
 |--------|-----------|------|
-| 0x500 | Controller → Motor | Commands & configuration |
-| 0x50F | Motor → Controller | Periodic feedback (10 Hz) |
-| 0x503 | Motor → Controller | ACK / state response |
+| **0x500** | Controller → Motor | Commands & configuration |
+| **0x50F** | Motor → Controller | Periodic feedback (10 Hz) |
+| **0x503** | Motor → Controller | ACK / state response |
 
 ---
 
 ## Byte-Level Decoding Rules
-
-### 16-bit decoding
 
 ```c
 uint16_t u16 = (B1 << 8) | B2;
@@ -56,188 +62,301 @@ int16_t  i16 = (int16_t)u16;
 ```
 
 - Big-endian
-- Used for angle and status words
+- Used for angle and configuration values
 
 ---
 
-## 0x50F – Motor Feedback Frame (DLC = 3, ~10 Hz)
+# PGN-Based Command Structure (CAN ID = 0x500)
 
-Two subtypes exist based on Byte0 (B0).
+**Byte 0 = PGN (command selector)**  
+**Byte 1–2 = value for that PGN**
 
-### Case A: B0 = 0x01 → Wheel Angle Feedback
-
-Payload:
+General format:
 ```
-50F: 01 AA BB
-```
-
-Decode:
-```c
-int16_t angle = (int16_t)((AA << 8) | BB);
-```
-
-Examples:
-- F6 90 → 0xF690 → -2416 (full left)
-- 03 E0 → 0x03E0 → +992 (full right)
-
-Interpretation:
-- Negative = left
-- Positive = right
-- Zero ≈ center
-
-| Byte | Meaning |
-|------|--------|
-| B0 | 0x01 = angle feedback |
-| B1 | Angle MSB |
-| B2 | Angle LSB |
-
----
-
-### Case B: B0 = 0x00 → Status / Internal Value (unknown)
-
-Payload:
-```
-50F: 00 AA BB
-```
-
-Decode:
-```c
-uint16_t status = (AA << 8) | BB;
-```
-
-| Byte | Meaning |
-|------|--------|
-| B0 | 0x00 = status frame |
-| B1 | Status MSB |
-| B2 | Status LSB |
-
----
-
-## 0x503 – ACK / State Response
-
-| CAN ID | Data | Meaning |
-|--------|------|---------|
-| 0x503 | 01 | Start / calibration ACK |
-| 0x503 | 02 | Stop / calibration complete |
-
----
-
-## 0x500 – Controller Commands
-
-### Start / Stop
-
-| Data | Meaning |
-|------|--------|
-| 04 | Start / enable |
-| 03 | Stop / disable |
-
-Sequence:
-```
-500 02 00 00
-500 04
-503 01
-```
-
-Stop:
-```
-500 03
-503 02
+CAN ID: 0x500
+Byte0 = PGN
+Byte1 = Value MSB (if used)
+Byte2 = Value LSB (if used)
 ```
 
 ---
 
-### Steering Command
+## PGN List
 
-Format:
+### PGN 0x02 – Steering Target Angle
+
 ```
 500: 02 XX YY
 ```
 
-Decode:
+Decode (signed):
 ```c
-uint16_t target = (XX << 8) | YY;
+int16_t target = (int16_t)((XX << 8) | YY);
 ```
 
 Examples:
-- 500 02 FF FF → center
-- 500 02 00 00 → center
-- 500 02 00 20 → small left
-- 500 02 00 50 → medium left
-- 500 02 0F 00 → full left
-- 500 02 FF 50 → medium right
+
+| Hex | Decimal | Meaning |
+|-----|---------|---------|
+| 02 FF FF | -1 | Center |
+| 02 00 00 | 0 | Center |
+| 02 00 20 | 32 | Small left |
+| 02 00 50 | 80 | Medium left |
+| 02 0F 00 | 3840 | Full left |
+| 02 FF 50 | -176 | Medium right |
+
+Range: approx **-2500 … +2500** (signed)
 
 ---
 
-### Calibration Trigger
+### PGN 0x03 – Stop Motor
 
-| CAN ID | Data | Meaning |
-|--------|------|--------|
-| 0x500 | 22 | Calibration start |
-| 0x503 | 02 | Calibration complete |
+```
+500: 03
+```
 
 ---
 
-## Calibration Behavior
+### PGN 0x04 – Start Motor
 
-During calibration, the wheel angle feedback (0x50F B0=01) shows:
+```
+500: 04
+```
 
-- Sinus-like oscillation
-- Increasing amplitude over time
-- Then settling near a reference point
-- Followed by 0x503 02 (calibration complete)
+---
+
+### PGN 0x06 – Extra Torque
+
+```
+500: 06 00 XX
+```
+
+| Hex | Decimal | Percent |
+|-----|---------|---------|
+| 1F | 31 | 31% |
+| 64 | 100 | 100% |
+
+---
+
+### PGN 0x08 – Left Endstop
+
+```
+500: 08 XX YY
+```
+
+| Hex | Decimal |
+|-----|---------|
+| 00 0D | 13 |
+| 00 0B | 11 |
+
+---
+
+### PGN 0x0D – Unknown Config Flag
+
+```
+500: 0D 00 01
+```
+
+---
+
+### PGN 0x0F – Right Endstop
+
+```
+500: 0F XX YY
+```
+
+Example:
+| Hex | Decimal |
+|-----|---------|
+| FF F9 | -7 (signed) |
+
+---
+
+### PGN 0x13 – Ramp Parameter A
+
+```
+500: 13 XX YY
+```
+
+---
+
+### PGN 0x15 – Ramp Parameter B
+
+```
+500: 15 XX YY
+```
+
+Ramp scaling:
+
+| Hex | Decimal | Percent |
+|-----|---------|---------|
+| 01 DC | 476 | 1% |
+| 04 88 | 1160 | 10% |
+| 06 E8 | 1768 | 18% |
+| 1F 40 | 8000 | 100% |
+
+---
+
+### PGN 0x17 – Unknown Parameter
+
+```
+500: 17 00 58
+```
+
+---
+
+### PGN 0x19 – Unknown Parameter
+
+```
+500: 19 03 E8
+```
+
+---
+
+### PGN 0x1D – Manual Override Sensitivity
+
+```
+500: 1D 00 XX
+```
+
+| Hex | Decimal | Meaning |
+|-----|---------|---------|
+| 57 | 87 | Sensitivity |
+| 53 | 83 | ~17% |
+
+---
+
+### PGN 0x22 – Calibration Trigger
+
+```
+500: 22
+```
+
+---
+
+### PGN 0x25 – Unknown Parameter
+
+```
+500: 25 00
+```
+
+---
+
+### PGN 0x30 – Encoder Type
+
+```
+500: 30 00 | 01
+```
+
+| Value | Meaning |
+|-------|--------|
+| 00 | 360 pulses / rev |
+| 01 | 1000 pulses / rev |
+
+---
+
+### PGN 0xFF – End of Configuration Block
+
+```
+500: FF
+```
+
+---
+
+# Motor Feedback (CAN ID = 0x50F)
+
+Format:
+```
+50F: B0 B1 B2
+```
+
+## B0 = 0x01 – Wheel Angle Feedback
+
+```c
+int16_t angle = (int16_t)((B1 << 8) | B2);
+```
+
+Examples:
+| Hex | Decimal |
+|-----|---------|
+| F6 90 | -2416 |
+| 03 E0 | 992 |
+
+Negative = left  
+Positive = right  
+Zero = center  
+
+---
+
+## B0 = 0x00 – Status / Unknown Internal Value
+
+```c
+uint16_t status = (B1 << 8) | B2;
+```
+
+Meaning unknown (likely internal diagnostics/state).
+
+---
+
+# ACK / State (CAN ID = 0x503)
+
+| Data | Meaning |
+|------|--------|
+| 01 | ACK / calibration started |
+| 02 | Calibration complete / stop |
+
+---
+
+# Calibration Behavior
+
+Wheel angle feedback shows:
+- sinus-like oscillation
+- increasing amplitude
+- settling near reference
+- completion with PGN 0x503 = 02
 
 Likely algorithm:
-1. Sweep left/right with growing range  
-2. Detect mechanical endstops  
-3. Compute center offset  
+1. Sweep left/right  
+2. Detect endstops  
+3. Compute center  
 4. Store limits  
-5. Report completion  
+5. Finish calibration  
 
 ---
 
-## Signed vs Offset Representation
+# Decimal ↔ Hex Conversion
 
-Raw decoding in one calibration trace produced only positive values (≈10…878).  
-Other captures show negative values (example F690 → -2416).
+| Decimal | Hex |
+|---------|-----|
+| 31 | 0x1F |
+| 476 | 0x01DC |
+| 1160 | 0x0488 |
+| 1768 | 0x06E8 |
+| 8000 | 0x1F40 |
+| -7 | 0xFFF9 |
 
-This indicates:
-- Protocol supports signed angle
-- Firmware may apply an internal center offset
-- Tablet UI likely displays centered values
-
-Two representations are useful:
-- Raw: direct int16
-- Centered: raw – offset
-
----
-
-## Calibration Chart
-
-Annotated chart file:
-```
-wheel_angle_calibration_trimmed_annotated_v3.png
-```
-
-Embed example:
-```markdown
-![Wheel angle during calibration](wheel_angle_calibration_trimmed_annotated_v3.png)
+Formula:
+```c
+hex = decimal & 0xFFFF;
+decimal = (int16_t)hex;
 ```
 
 ---
 
-## Summary
+# Summary
 
-- 0x50F B0=01 = wheel angle feedback (signed 16-bit)
-- 0x50F B0=00 = status / unknown internal value
-- 0x500 = controller command/config
-- 0x503 = ACK / state
-- Calibration uses oscillating sweep to determine limits and center
-- Angle is logically signed even if some traces remain positive due to offset
+- Byte0 = PGN (command selector)
+- Byte1–2 = value
+- Steering uses signed int16
+- Configuration uses unsigned int16 / percentages
+- Calibration via PGN 0x22
+- Feedback via CAN ID 0x50F
+- ACK via CAN ID 0x503
 
 ---
 
-## Open Questions
+# Open Questions
 
-- Exact physical unit scaling (counts → degrees/radians)
-- Meaning of 0x50F B0=00 status word
-- Full mapping of configuration parameters (0x500 06, 0x500 1D, etc.)
+- Physical unit scaling (counts → degrees)
+- Meaning of status frame (0x50F B0=00)
+- Full decoding of unknown PGNs
