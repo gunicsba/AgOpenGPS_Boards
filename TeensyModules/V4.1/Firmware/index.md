@@ -25,6 +25,8 @@ Designed so an AI tool or software implementation can be generated without addit
 
 ## Connector Pinout
 
+![Connector pinout](Machinerypinout.jpg "Connector pinout")
+
 ### Power & Wheel Angle Sensor (WAS)
 
 | Wire color | Function |
@@ -33,6 +35,8 @@ Designed so an AI tool or software implementation can be generated without addit
 | Brown | +12 V |
 | Brown (separate) | WAS +5 V output |
 | Yellow/Green stripe | WAS signal (appears digital on oscilloscope) |
+
+Wheel angle value seems to be some kind of 1 wire digital signal. When disconnected (all 3 wires) the motor thinks it's at the center position. That's why it's possible to steer it with position commands. (It disables itself after a couple seconds as the WAS value doesn't change. ERROR led lights up, but sending a new angle + start command resets it.)
 
 ### CAN Bus
 
@@ -51,6 +55,27 @@ Designed so an AI tool or software implementation can be generated without addit
 | **0x500** | Controller → Motor | Commands & configuration |
 | **0x50F** | Motor → Controller | Periodic feedback (10 Hz) |
 | **0x503** | Motor → Controller | ACK / state response |
+
+
+| PGN (Byte0) | Bytes Used      | Byte1–2 Meaning              | Value Type                | Purpose                                      |
+| ----------- | --------------- | ---------------------------- | ------------------------- | -------------------------------------------- |
+| **0x02**    | 2 bytes (B1,B2) | Target steering angle        | `int16` (signed)          | Steering command (left/right, centered at 0) |
+| **0x03**    | none            | —                            | —                         | Stop / disable motor                         |
+| **0x04**    | none            | —                            | —                         | Start / enable motor                         |
+| **0x06**    | 2 bytes         | Extra torque value (percent) | `uint16` / %              | Extra motor torque setting                   |
+| **0x08**    | 2 bytes         | Left endstop value           | `uint16`                  | Left steering limit                          |
+| **0x0D**    | 2 bytes         | Config flag / mode           | `uint16`                  | Unknown configuration parameter              |
+| **0x0F**    | 2 bytes         | Right endstop value          | `int16` (observed signed) | Right steering limit                         |
+| **0x13**    | 2 bytes         | Ramp parameter A             | `uint16`                  | Acceleration / ramp tuning                   |
+| **0x15**    | 2 bytes         | Ramp parameter B             | `uint16`                  | Acceleration / ramp tuning                   |
+| **0x17**    | 2 bytes         | Config parameter             | `uint16`                  | Unknown tuning parameter                     |
+| **0x19**    | 2 bytes         | Config parameter             | `uint16`                  | Unknown tuning parameter                     |
+| **0x1D**    | 2 bytes         | Manual override sensitivity  | `uint16` / %              | Driver override sensitivity                  |
+| **0x22**    | none            | —                            | —                         | Calibration trigger                          |
+| **0x25**    | 1 byte (B1)     | Config flag                  | `uint8`                   | Unknown parameter                            |
+| **0x30**    | 1 byte (B1)     | Encoder type (0/1)           | `uint8`                   | 0 = 360 imp/rev, 1 = 1000 imp/rev            |
+| **0xFF**    | none            | —                            | —                         | End of configuration block                   |
+
 
 ---
 
@@ -106,6 +131,7 @@ Examples:
 | 02 FF 50 | -176 | Medium right |
 
 Range: approx **-2500 … +2500** (signed)
+Theory: The wheel angle itself might go from -25.00 to 25.00 degrees
 
 ---
 
@@ -122,6 +148,8 @@ Range: approx **-2500 … +2500** (signed)
 ```
 500: 04
 ```
+
+Needs to be sent after the target angle.
 
 ---
 
@@ -315,13 +343,6 @@ Wheel angle feedback shows:
 - settling near reference
 - completion with PGN 0x503 = 02
 
-Likely algorithm:
-1. Sweep left/right  
-2. Detect endstops  
-3. Compute center  
-4. Store limits  
-5. Finish calibration  
-
 ---
 
 # Decimal ↔ Hex Conversion
@@ -360,3 +381,4 @@ decimal = (int16_t)hex;
 - Physical unit scaling (counts → degrees)
 - Meaning of status frame (0x50F B0=00)
 - Full decoding of unknown PGNs
+
