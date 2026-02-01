@@ -18,7 +18,7 @@ uint8_t KeyaHeartbeat[] = { 0, 0, 0, 0, 0, 0, 0, 0, };
 // templates for matching responses of interest
 uint8_t keyaCurrentResponse[] = { 0x60, 0x12, 0x21, 0x01 };
 
-uint64_t KeyaPGN = 0x06000001;
+uint64_t KeyaPGN = 0x500;
 
 const bool debugKeya = true;
 
@@ -26,8 +26,8 @@ void keyaSend(uint8_t data[]) {
 	//TODO Use this optimisation function once we're happy things are moving the right way
 	CAN_message_t KeyaBusSendData;
 	KeyaBusSendData.id = KeyaPGN;
-	KeyaBusSendData.flags.extended = true;
-	KeyaBusSendData.len = 8;
+	KeyaBusSendData.flags.extended = false;
+	KeyaBusSendData.len = 3;
 	memcpy(KeyaBusSendData.buf, data, sizeof(data));
 	Keya_Bus.write(KeyaBusSendData);
 }
@@ -62,16 +62,9 @@ bool isPatternMatch(const CAN_message_t& message, const uint8_t* pattern, size_t
 void disableKeyaSteer() {
 	CAN_message_t KeyaBusSendData;
 	KeyaBusSendData.id = KeyaPGN;
-	KeyaBusSendData.flags.extended = true;
-	KeyaBusSendData.len = 8;
-	KeyaBusSendData.buf[0] = 0x23;
-	KeyaBusSendData.buf[1] = 0x0c;
-	KeyaBusSendData.buf[2] = 0x20;
-	KeyaBusSendData.buf[3] = 0x01;
-	KeyaBusSendData.buf[4] = 0;
-	KeyaBusSendData.buf[5] = 0;
-	KeyaBusSendData.buf[6] = 0;
-	KeyaBusSendData.buf[7] = 0;
+	KeyaBusSendData.flags.extended = false;
+	KeyaBusSendData.len = 1;
+	KeyaBusSendData.buf[0] = 0x03;
 	Keya_Bus.write(KeyaBusSendData);
 	//if (debugKeya) Serial.println("Disabled Keya motor");
 }
@@ -96,22 +89,15 @@ void disableKeyaSteerTEST() {
 void enableKeyaSteer() {
 	CAN_message_t KeyaBusSendData;
 	KeyaBusSendData.id = KeyaPGN;
-	KeyaBusSendData.flags.extended = true;
-	KeyaBusSendData.len = 8;
-	KeyaBusSendData.buf[0] = 0x23;
-	KeyaBusSendData.buf[1] = 0x0d;
-	KeyaBusSendData.buf[2] = 0x20;
-	KeyaBusSendData.buf[3] = 0x01;
-	KeyaBusSendData.buf[4] = 0;
-	KeyaBusSendData.buf[5] = 0;
-	KeyaBusSendData.buf[6] = 0;
-	KeyaBusSendData.buf[7] = 0;
+	KeyaBusSendData.flags.extended = false;
+	KeyaBusSendData.len = 1;
+	KeyaBusSendData.buf[0] = 0x04;
 	Keya_Bus.write(KeyaBusSendData);
 	if (debugKeya) Serial.println("Enabled Keya motor");
 }
 
 void SteerKeya(int steerSpeed) {
-	int actualSpeed = map(steerSpeed, -255, 255, -995, 998);
+	int actualSpeed = map(steerSpeed, -255, 255, -100, 100);
 	if (pwmDrive == 0) {
 		disableKeyaSteer();
 		//if (debugKeya) Serial.println("pwmDrive zero - disabling");
@@ -122,26 +108,12 @@ void SteerKeya(int steerSpeed) {
 
 	CAN_message_t KeyaBusSendData;
 	KeyaBusSendData.id = KeyaPGN;
-	KeyaBusSendData.flags.extended = true;
-	KeyaBusSendData.len = 8;
-	KeyaBusSendData.buf[0] = 0x23;
-	KeyaBusSendData.buf[1] = 0x00;
-	KeyaBusSendData.buf[2] = 0x20;
-	KeyaBusSendData.buf[3] = 0x01;
-	if (steerSpeed < 0) {
-		KeyaBusSendData.buf[4] = highByte(actualSpeed); // TODO take PWM in instead for speed (this is -1000)
-		KeyaBusSendData.buf[5] = lowByte(actualSpeed);
-		KeyaBusSendData.buf[6] = 0xff;
-		KeyaBusSendData.buf[7] = 0xff;
-		if (debugKeya) Serial.println("pwmDrive < zero - clockwise - steerSpeed " + String(steerSpeed));
-	}
-	else {
-		KeyaBusSendData.buf[4] = highByte(actualSpeed);
-		KeyaBusSendData.buf[5] = lowByte(actualSpeed);
-		KeyaBusSendData.buf[6] = 0x00;
-		KeyaBusSendData.buf[7] = 0x00;
-		if (debugKeya) Serial.println("pwmDrive > zero - anticlock-clockwise - steerSpeed " + String(steerSpeed));
-	}
+	KeyaBusSendData.flags.extended = false;
+	KeyaBusSendData.len = 3;
+	KeyaBusSendData.buf[0] = 0x02;
+	KeyaBusSendData.buf[1] = highByte(actualSpeed); // TODO take PWM in instead for speed (this is -1000)
+	KeyaBusSendData.buf[2] = lowByte(actualSpeed);
+	if (debugKeya) Serial.println("pwmDrive > zero - anticlock-clockwise - steerSpeed " + String(steerSpeed));
 	Keya_Bus.write(KeyaBusSendData);
 	enableKeyaSteer();
 }

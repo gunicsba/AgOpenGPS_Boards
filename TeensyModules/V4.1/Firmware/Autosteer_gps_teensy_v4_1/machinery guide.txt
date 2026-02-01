@@ -1,0 +1,113 @@
+machinery guide
+CAN bus
+250kbps
+
+IDDLE
+
+Motor data:
+50Fh  ID=1295,Type=D,Length=3,Data=01 FD 03
+50Fh 01 FD 03 ???
+50Fh 01 | 10Hz | szögszenzor érték / wheel angle sensor value
+          F6 90 -> full right
+          03 E0 -> full left
+50Fh 00 02 47 ???
+
+500h 03 -> ???
+
+00Eh ???
+
+
+Start:
+500h 13 1B B0
+500h 15 1B B0
+500h 17 00 58
+500h FF
+
+500h 02 00 00
+500h 04
+503h 01
+
+Stop:
+500h 03
+503h 02
+
+
+
+
+500h 02 FF FF ->center
+500h 02 00 00 ->center
+500h 02 0F 00 ->full left
+500h 02 00 20 ->small left
+500h 02 00 50 ->medium left
+500h 02 00 90 ->medium left
+
+500h 02 FF 50 -> medium right
+
+
+
+STart:
+500h 02 00 00
+500h 04  -> START command!
+503h 01
+
+
+
+
+
+ID=1283,Type=D,Length=1,Data=02,IDFormat=hex,Comment="Machinery Stop 2"
+ID=1280,Type=D,Length=1,Data=03,IDFormat=hex,Comment="Machinery Stop 1"
+ID=1283,Type=D,Length=1,Data=01,CycleTime=10,Paused=1,IDFormat=hex,Comment="Machinery Start 3"
+ID=1280,Type=D,Length=1,Data=04,CycleTime=10,Paused=1,IDFormat=hex,Comment="Machinery Start 2"
+ID=1280,Type=D,Length=3,Data=151BB0,IDFormat=hex,Comment="Machinery Speed / Direction ???"
+ID=1280,Type=D,Length=3,Data=15FFFF,IDFormat=hex,Comment="Machinery Reverse"
+ID=1280,Type=D,Length=3,Data=02FFFF,IDFormat=hex,Comment="Angle Center / közép"
+ID=1280,Type=D,Length=3,Data=02FFF6,IDFormat=hex,Comment="Angle Right / Jobb"
+ID=1280,Type=D,Length=3,Data=020050,IDFormat=hex,Comment="Angle Left / Bal"
+
+
+
+Bal végállás:
+
+500h 22 -> kalibráció indítása  (passz, hogy mire jó)
+503h 01 -> -""-
+
+503h  02 kormány kalibárció vége
+
+
+Végállás információ -> szoftverben benne
+
+
+
+Automata kormányzás beállítása
+500h 06 00 1F  extra nyomaték 1F ->31%
+500h 0D 00 01  
+500h 1D 00 57  kézi beavatkozás érzékenysége % (DEC 83 100-17%  DEC 87 / 57h etc)
+500h 13 1B B0  rámpa???
+500h 15 1B B0  rámpa???  01DCh 476 1%  | 0488h  1160 10%   |06E8h 1768dec 18%  |  1F40 8000 -> 100%
+500h 17 00 58
+500h 19 03 E8
+500h 25 00
+500h 30 01  enkóder típus (00 -> 360imp/rev   01 1000imp/rev)
+500h FF
+
+500h 08 00 0D   (00 0B érték is)  bal szélső érték KÉSZ???
+500h 0F FF F9   jobb szélső érték
+
+31%
+
+500h 02 XX XX -> kormány parancs + cél szög 
+
+
+
+
+
+ID=1283,Type=D,Length=1,Data=01,CycleTime=10,Paused=1,IDFormat=hex,Comment="Machinery kalibráció indítás 2"
+ID=1280,Type=D,Length=1,Data=22,IDFormat=hex,Comment="Machinery kalibráció indítás"
+ID=1283,Type=D,Length=1,Data=02,IDFormat=hex,Comment="Machinery Stop 2"
+ID=1280,Type=D,Length=1,Data=03,IDFormat=hex,Comment="Machinery Stop 1"
+ID=1280,Type=D,Length=1,Data=04,CycleTime=10,Paused=1,IDFormat=hex,Comment="Machinery Start 2"
+ID=1280,Type=D,Length=3,Data=151BB0,IDFormat=hex,Comment="Machinery Speed / Direction ???"
+ID=1280,Type=D,Length=3,Data=15FFFF,IDFormat=hex,Comment="Machinery Reverse"
+ID=1280,Type=D,Length=3,Data=02FFF6,IDFormat=hex,Comment="Angle Right / Jobb"
+ID=1280,Type=D,Length=3,Data=020050,IDFormat=hex,Comment="Angle Left / Bal"
+ID=1280,Type=D,Length=3,Data=02FFFF,IDFormat=hex,Comment="Angle Center / közép"
