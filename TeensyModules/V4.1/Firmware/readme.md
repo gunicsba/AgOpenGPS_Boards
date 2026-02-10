@@ -29,4 +29,115 @@ A few modifications from me :)
 	setting it to 20 means:
 	roll = roll*0.8 + measuredRoll*0.2
 
+
+
+Fendt COM3 stuff from Thibault:
+
+#include <FlexCAN_T4.h>
+FlexCAN_T4<CAN1, RX_SIZE_256, TX_SIZE_256> K_Bus;
+
+void setup(){
+  Serial.begin(115200);
+  delay(1000);
+  
+  K_Bus.begin();
+  K_Bus.setBaudRate(100000); // Vitesse Fendt COM3 (100kbps)
+  K_Bus.enableFIFO();
+  K_Bus.setFIFOFilter(REJECT_ALL);
+  K_Bus.setFIFOFilter(0, 0x61F, STD);
+  
+  Serial.println("--- TEST CAN FENDT COM3 LANCE ---");
+}
+
+void loop()
+{
+  // 1. SEQUENCE DESCENTE (GO)
+  Serial.println("Appui sur GO...");
+  pressGo();
+  delay(300);      // On reste appuye 0.3s
+  liftGo();       // On relache
+  
+  Serial.println("Attente 10 secondes...");
+  delay(10000);   // Pause de 10s avant l'autre bouton
+
+  // 2. SEQUENCE MONTEE (END)
+  Serial.println("Appui sur END...");
+  pressEnd();  
+  delay(300);      // On reste appuye 0.3s
+  liftEnd();      // On relache
+
+  Serial.println("Attente 10 secondes...");
+  delay(10000);   // Pause de 10s avant de recommencer
+}
+
+// --- FONCTIONS CORRIGEES AVEC LES TRAMES DE TONY ---
+
+void pressGo()
+{
+    CAN_message_t msg;
+    msg.id = 0x61F;
+    msg.len = 8;
+    msg.flags.extended = false;
+    msg.buf[0] = 0x15;
+    msg.buf[1] = 0x33; // Code bouton GO
+    msg.buf[2] = 0x1E; // Signature K-Bus (Crucial !)
+    msg.buf[3] = 0xCA;
+    msg.buf[4] = 0x80; // Status: Pressé
+    msg.buf[5] = 0x01; // Action: Press GO
+    msg.buf[6] = 0x00;
+    msg.buf[7] = 0x00;
+    K_Bus.write(msg);
+}
+
+void liftGo()
+{
+    CAN_message_t msg;
+    msg.id = 0x61F;
+    msg.len = 8;
+    msg.flags.extended = false;
+    msg.buf[0] = 0x15;
+    msg.buf[1] = 0x33; 
+    msg.buf[2] = 0x1E; 
+    msg.buf[3] = 0xCA;
+    msg.buf[4] = 0x00; // Status: Relâché
+    msg.buf[5] = 0x02; // Action: Release GO
+    msg.buf[6] = 0x00;
+    msg.buf[7] = 0x00;
+    K_Bus.write(msg);
+}
+
+void pressEnd()
+{
+    CAN_message_t msg;
+    msg.id = 0x61F;
+    msg.len = 8;
+    msg.flags.extended = false;
+    msg.buf[0] = 0x15;
+    msg.buf[1] = 0x34; // Code bouton END
+    msg.buf[2] = 0x1E; 
+    msg.buf[3] = 0xCA;
+    msg.buf[4] = 0x80; 
+    msg.buf[5] = 0x03; // Action: Press END
+    msg.buf[6] = 0x00;
+    msg.buf[7] = 0x00;
+    K_Bus.write(msg);
+}
+
+void liftEnd()
+{
+    CAN_message_t msg;
+    msg.id = 0x61F;
+    msg.len = 8;
+    msg.flags.extended = false;
+    msg.buf[0] = 0x15;
+    msg.buf[1] = 0x34; 
+    msg.buf[2] = 0x1E; 
+    msg.buf[3] = 0xCA;
+    msg.buf[4] = 0x00; 
+    msg.buf[5] = 0x04; // Action: Release END
+    msg.buf[6] = 0x00;
+    msg.buf[7] = 0x00;
+    K_Bus.write(msg);
+}
+
 	I think the right value will be around 15-30 needs testing.
