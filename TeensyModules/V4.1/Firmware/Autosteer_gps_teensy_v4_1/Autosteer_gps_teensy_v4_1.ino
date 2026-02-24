@@ -190,8 +190,8 @@ uint8_t GPS2rxbuffer[serial_buffer_size];   //Extra serial rx buffer
 uint8_t GPS2txbuffer[serial_buffer_size];   //Extra serial tx buffer
 uint8_t RTKrxbuffer[serial_buffer_size];    //Extra serial rx buffer
 
-/* A parser is declared with 3 handlers at most */
-NMEAParser<2> parser;
+/* A parser is declared with 5 handlers at most */
+NMEAParser<5> parser;
 
 bool isTriggered = false;
 bool blink = false;
@@ -261,6 +261,7 @@ void setup()
   parser.setErrorHandler(errorHandler);
   parser.addHandler("G-GGA", GGA_Handler);
   parser.addHandler("G-VTG", VTG_Handler);
+  parser.addHandler("KSXT-", KSXT_Handler);
 
   delay(10);
   Serial.begin(baudAOG);

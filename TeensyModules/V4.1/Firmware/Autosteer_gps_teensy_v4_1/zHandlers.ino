@@ -1,6 +1,11 @@
 // Conversion to Hexidecimal
 const char* asciiHex = "0123456789ABCDEF";
 
+// KSXT message buffer
+char ksxtBuffer[256];
+bool ksxtReceived = false;
+unsigned long ksxtLastReceived = 0;  // Timestamp for timeout
+
 // the new PANDA sentence buffer
 char nmea[100];
 
@@ -325,6 +330,13 @@ void imuHandler()
 
 void BuildNmea(void)
 {
+    // If KSXT was recently received (within 500ms), skip PANDA/PAOGI generation
+    if (ksxtReceived && (millis() - ksxtLastReceived < 500))
+    {
+        return;  // KSXT takes priority - don't generate PANDA/PAOGI
+    }
+    ksxtReceived = false;  // Reset if timeout expired
+    
     strcpy(nmea, "");
 
     if (useDual) strcat(nmea, "$PAOGI,");
@@ -527,4 +539,52 @@ void VTG_Handler()
   parser.getArg(4, speedKnots);
 
 
+}
+
+void KSXT_Handler()
+{
+  digitalWrite(GPSGREEN_LED, !digitalRead(GPSGREEN_LED)); // Toggle LED on KSXT receive
+  
+  // Get the message type
+  char sentence[256];
+  parser.getType(sentence);
+  
+  // Reconstruct the full sentence with all arguments
+  strcpy(ksxtBuffer, "$");
+  strcat(ksxtBuffer, sentence);
+  
+  for(int i = 0; i < parser.argCount(); i++) {
+    strcat(ksxtBuffer, ",");
+    char arg[64];
+    parser.getArg(i, arg);
+    strcat(ksxtBuffer, arg);
+  }
+  
+  // Add checksum calculation
+  int16_t sum = 0;
+  for(unsigned int i = 1; i < strlen(ksxtBuffer); i++) {
+    sum ^= ksxtBuffer[i];
+  }
+  
+  char checksumStr[8];
+  sprintf(checksumStr, "*%02X\r\n", sum);
+  strcat(ksxtBuffer, checksumStr);
+  
+  // Mark KSXT as received and record timestamp
+  ksxtReceived = true;
+  ksxtLastReceived = millis();
+  
+  // Forward to AgIO immediately
+  if (!passThroughGPS && !passThroughGPS2)
+  {
+      SerialAOG.print(ksxtBuffer);  // Send KSXT via USB
+  }
+
+  if (Ethernet_running)   //If ethernet running send the KSXT via UDP
+  {
+      int len = strlen(ksxtBuffer);
+      Eth_udpPAOGI.beginPacket(Eth_ipDestination, portDestination);
+      Eth_udpPAOGI.write(ksxtBuffer, len);
+      Eth_udpPAOGI.endPacket();
+  }
 }
