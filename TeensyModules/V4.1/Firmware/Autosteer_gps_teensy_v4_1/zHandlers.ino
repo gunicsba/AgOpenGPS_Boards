@@ -1,10 +1,15 @@
 // Conversion to Hexidecimal
 const char* asciiHex = "0123456789ABCDEF";
 
+// KSXT message buffer
+char ksxtBuffer[256];
+bool ksxtReceived = false;
+unsigned long ksxtLastReceived = 0;  // Timestamp for timeout
+
+elapsedMillis badQOStimer;
+
 // the new PANDA sentence buffer
 char nmea[100];
-
-// GGA
 char fixTime[12];
 char latitude[15];
 char latNS[3];
@@ -26,12 +31,10 @@ char imuRoll[6];
 char imuPitch[6];
 char imuYawRate[6];
 
-elapsedMillis badQOStimer;
-
 // If odd characters showed up.
 void errorHandler()
 {
-  //nothing at the moment
+  // Error handler - can add debug prints here if needed
 }
 
 void GGA_Handler() //Rec'd GGA
@@ -378,6 +381,27 @@ void imuHandler()
 
 void BuildNmea(void)
 {
+    // If KSXT message was received recently (within 1000ms), use it instead of building PANDA/PAOGI
+    if (ksxtReceived && (millis() - ksxtLastReceived < 1000)) {
+        if (!passThroughGPS && !passThroughGPS2)
+        {
+            SerialAOG.print(ksxtBuffer);  // Send KSXT via USB
+        }
+
+        if (Ethernet_running)   //If ethernet running send the KSXT via UDP
+        {
+            int len = strlen(ksxtBuffer);
+            Eth_udpPAOGI.beginPacket(Eth_ipDestination, portDestination);
+            Eth_udpPAOGI.write(ksxtBuffer, len);
+            Eth_udpPAOGI.endPacket();
+        }
+        return;
+    }
+    else {
+        // Clear the flag if it's been too long since last KSXT
+        ksxtReceived = false;
+    }
+    
     strcpy(nmea, "");
 
     if (useDual) strcat(nmea, "$PAOGI,");
@@ -570,6 +594,54 @@ void CalculateChecksum(void)
     010.2,K      Ground speed, Kilometers per hour
      48          Checksum
 */
+
+void KSXT_Handler()
+{
+  digitalWrite(GPSGREEN_LED, !digitalRead(GPSGREEN_LED)); // Toggle LED on KSXT receive
+  
+  // Get the raw KSXT sentence from the parser
+  char sentence[256];
+  parser.getType(sentence);  // Get the message type
+  
+  // Reconstruct the full sentence with all arguments
+  strcpy(ksxtBuffer, "$" );
+  strcat(ksxtBuffer, sentence);
+  
+  for(int i = 0; i < parser.argCount(); i++) {
+    strcat(ksxtBuffer, ",");
+    char arg[64];
+    parser.getArg(i, arg);
+    strcat(ksxtBuffer, arg);
+  }
+  
+  // Add checksum calculation
+  int16_t sum = 0;
+  for(unsigned int i = 1; i < strlen(ksxtBuffer); i++) {
+    sum ^= ksxtBuffer[i];
+  }
+  
+  char checksumStr[4];
+  sprintf(checksumStr, "*%02X\r\n", sum);
+  strcat(ksxtBuffer, checksumStr);
+  
+  // Forward to AgIO immediately
+  if (!passThroughGPS && !passThroughGPS2)
+  {
+      SerialAOG.print(ksxtBuffer);  // Send KSXT via USB
+  }
+
+  if (Ethernet_running)   //If ethernet running send the KSXT via UDP
+  {
+      int len = strlen(ksxtBuffer);
+      Eth_udpPAOGI.beginPacket(Eth_ipDestination, portDestination);
+      Eth_udpPAOGI.write(ksxtBuffer, len);
+      Eth_udpPAOGI.endPacket();
+  }
+  
+  // Mark that KSXT was received with timestamp
+  ksxtReceived = true;
+  ksxtLastReceived = millis();
+}
 
 void VTG_Handler()
 {
