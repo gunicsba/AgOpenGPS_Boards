@@ -226,12 +226,13 @@ void hydraulicTimedPins()
 }
 
 int triggerPin(int pin, bool state, int timer) {
-    Serial.print("Trigger Pin: ");
+/*    Serial.print("Trigger Pin: ");
     Serial.print(pin);
     Serial.print(" - state: ");
     Serial.print(state);
     Serial.print(" - timer: ");
     Serial.println(timer);
+    */
     digitalWrite(pin, state);
     if(timer) return millis() + (1000 * timer);
     return 0;

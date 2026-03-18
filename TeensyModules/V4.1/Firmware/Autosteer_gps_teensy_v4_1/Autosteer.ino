@@ -134,6 +134,9 @@ uint8_t pulseCount = 0; // Steering Wheel Encoder
 bool encEnable = false; //debounce flag
 uint8_t thisEnc = 0, lastEnc = 0;
 
+//K-Bus CAN button engage/disengage (Fendt armrest button)
+uint8_t kbusPrev = 0, kbusState = 1;
+
 //Variables for settings
 struct Storage {
   uint8_t Kp = 40;              // proportional gain
@@ -333,6 +336,18 @@ void autosteerLoop()
         }
       }
       previous = reading;
+
+      //K-Bus CAN button engage/disengage - works in parallel with physical controls
+      //This allows the CAN bus button to override or work alongside the physical steer switch/button
+      if (kbusState == 1)
+      {
+        steerSwitch = 1;  //Engage via CAN
+      }
+      else if (kbusState == 0)
+      {
+        steerSwitch = 0;  //Disengage via CAN
+      }
+
     }
     else                                      // No steer switch and no steer button
     {

@@ -12,13 +12,13 @@
 void KBus_setup(void) {
     if (!FENDT_KBUS_ENABLED) return;
     
-    Serial.println("Starting Fendt K-Bus (CAN1) at 250kbps...");
+    Serial.println("Starting CNH (CAN1) at 250kbps...");
     
     K_Bus.begin();
     K_Bus.setBaudRate(250000);  //Older Fendt models use 250kbps
     K_Bus.enableFIFO();
     K_Bus.setFIFOFilter(REJECT_ALL);
-    K_Bus.setFIFOFilter(0, 0x613, STD);  //Fendt Arm Rest Buttons
+    K_Bus.setFIFOFilter(0, 0x14FF7706, EXT);  //Fendt Arm Rest Buttons
     
     delay(300);
     
@@ -27,15 +27,33 @@ void KBus_setup(void) {
 
 //---Receive K_Bus message (for monitoring armrest button presses if needed)
 void KBus_Receive() {
-    if (!FENDT_KBUS_ENABLED) return;
-    
+    if (!FENDT_KBUS_ENABLED) return;            
     CAN_message_t KBusReceiveData;
+
     if (K_Bus.read(KBusReceiveData)) {
         //Fendt armrest button detection
         //This can be used to detect if someone presses the physical buttons
-        if (KBusReceiveData.buf[0] == 0x15 && KBusReceiveData.buf[2] == 0x06 && KBusReceiveData.buf[3] == 0xCA) {
-            //Button press detected on K-Bus
-            //Could add engage/disengage logic here if needed
+        if (KBusReceiveData.buf[0] == 130 && KBusReceiveData.buf[1] == 1) {
+            //Button press detected on K-Bus - Toggle steer engage/disengage
+            //This mimics the steer button functionality - momentary press toggles state
+            
+            //Detect rising edge (button press)
+            if (kbusPrev == 0) {
+                if (kbusState == 1) {
+                    kbusState = 0;
+                    steerSwitch = 0;  //Disengage
+                    Serial.println("K-Bus: Steer Disengaged");
+                } else {
+                    kbusState = 1;
+                    steerSwitch = 1;  //Engage  
+                    Serial.println("K-Bus: Steer Engaged");
+                }
+            }
+            kbusPrev = 1;
+        } 
+        else if (KBusReceiveData.buf[0] == 130 && KBusReceiveData.buf[1] == 0) {
+            //Button release detected - reset for next press
+            kbusPrev = 0;
         }
     }
 }
@@ -47,7 +65,7 @@ void pressGo() {
     if (!FENDT_KBUS_ENABLED) return;
     
     CAN_message_t buttonData;
-    buttonData.id = 0x613;
+    buttonData.id = 0x14FF7706;
     buttonData.len = 8;
     for (uint8_t i = 0; i < sizeof(goPress); i++) {
         buttonData.buf[i] = goPress[i];
@@ -60,9 +78,10 @@ void pressGo() {
 //Lift (release) the Big Go button
 void liftGo() {
     if (!FENDT_KBUS_ENABLED) return;
-    
+    return;
+
     CAN_message_t buttonData;
-    buttonData.id = 0x613;
+    buttonData.id = 0x14FF7706;
     buttonData.len = 8;
     for (uint8_t i = 0; i < sizeof(goLift); i++) {
         buttonData.buf[i] = goLift[i];
@@ -76,7 +95,7 @@ void pressEnd() {
     if (!FENDT_KBUS_ENABLED) return;
     
     CAN_message_t buttonData;
-    buttonData.id = 0x613;
+    buttonData.id = 0x14FF7706;
     buttonData.len = 8;
     for (uint8_t i = 0; i < sizeof(endPress); i++) {
         buttonData.buf[i] = endPress[i];
@@ -89,9 +108,9 @@ void pressEnd() {
 //Lift (release) the Big End button
 void liftEnd() {
     if (!FENDT_KBUS_ENABLED) return;
-    
+return;    
     CAN_message_t buttonData;
-    buttonData.id = 0x613;
+    buttonData.id = 0x14FF7706;
     buttonData.len = 8;
     for (uint8_t i = 0; i < sizeof(endLift); i++) {
         buttonData.buf[i] = endLift[i];
