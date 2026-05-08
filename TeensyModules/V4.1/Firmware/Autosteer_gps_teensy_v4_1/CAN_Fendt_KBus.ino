@@ -33,7 +33,7 @@ void KBus_Receive() {
     if (K_Bus.read(KBusReceiveData)) {
         //Fendt armrest button detection
         //This can be used to detect if someone presses the physical buttons
-        if (KBusReceiveData.buf[0] == 130 && KBusReceiveData.buf[1] == 1) {
+        if (KBusReceiveData.buf[4] == 1) {
             //Button press detected on K-Bus - Toggle steer engage/disengage
             //This mimics the steer button functionality - momentary press toggles state
             
