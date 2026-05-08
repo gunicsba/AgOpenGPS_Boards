@@ -135,7 +135,7 @@ bool encEnable = false; //debounce flag
 uint8_t thisEnc = 0, lastEnc = 0;
 
 //K-Bus CAN button engage/disengage (Fendt armrest button)
-uint8_t kbusPrev = 0, kbusState = 1;
+uint8_t kbusReading = HIGH, kbusPrevious = 0;
 
 //Variables for settings
 struct Storage {
@@ -336,18 +336,25 @@ void autosteerLoop()
         }
       }
       previous = reading;
-
-      //K-Bus CAN button engage/disengage - works in parallel with physical controls
-      //This allows the CAN bus button to override or work alongside the physical steer switch/button
-      if (kbusState == 1)
+     if (FENDT_KBUS_ENABLED)  //K-Bus CAN button (Fendt armrest)
+     {
+      if (kbusReading == LOW && kbusPrevious == HIGH)
       {
-        steerSwitch = 1;  //Engage via CAN
+        if (currentState == 1)
+        {
+          currentState = 0;
+          steerSwitch = 0;
+          Serial.println("K-Bus: Steer Disengaged");
+        }
+        else
+        {
+          currentState = 1;
+          steerSwitch = 1;
+          Serial.println("K-Bus: Steer Engaged");
+        }
       }
-      else if (kbusState == 0)
-      {
-        steerSwitch = 0;  //Disengage via CAN
-      }
-
+      kbusPrevious = kbusReading;
+     }
     }
     else                                      // No steer switch and no steer button
     {

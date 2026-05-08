@@ -34,26 +34,12 @@ void KBus_Receive() {
         //Fendt armrest button detection
         //This can be used to detect if someone presses the physical buttons
         if (KBusReceiveData.buf[0] == 130 && KBusReceiveData.buf[1] == 1) {
-            //Button press detected on K-Bus - Toggle steer engage/disengage
-            //This mimics the steer button functionality - momentary press toggles state
-            
-            //Detect rising edge (button press)
-            if (kbusPrev == 0) {
-                if (kbusState == 1) {
-                    kbusState = 0;
-                    steerSwitch = 0;  //Disengage
-                    Serial.println("K-Bus: Steer Disengaged");
-                } else {
-                    kbusState = 1;
-                    steerSwitch = 1;  //Engage  
-                    Serial.println("K-Bus: Steer Engaged");
-                }
-            }
-            kbusPrev = 1;
+            //Button press detected on K-Bus
+            kbusReading = LOW;  //Pressed = LOW (same as physical button)
         } 
         else if (KBusReceiveData.buf[0] == 130 && KBusReceiveData.buf[1] == 0) {
-            //Button release detected - reset for next press
-            kbusPrev = 0;
+            //Button release detected
+            kbusReading = HIGH;  //Released = HIGH
         }
     }
 }
