@@ -15,14 +15,14 @@ void KBus_setup(void) {
     Serial.println("Starting CNH (CAN1) at 250kbps...");
     
     K_Bus.begin();
-    K_Bus.setBaudRate(250000);  //Older Fendt models use 250kbps
+    K_Bus.setBaudRate(250000, LISTEN_ONLY);  //CNH use 250kbps and we only want to LISTEN
     K_Bus.enableFIFO();
     K_Bus.setFIFOFilter(REJECT_ALL);
-    K_Bus.setFIFOFilter(0, 0x14FF7706, EXT);  //Fendt Arm Rest Buttons
+    K_Bus.setFIFOFilter(0, 0x14FF7706, EXT);  //CNH Arm Rest Buttons
     
     delay(300);
     
-    Serial.println("Fendt K-Bus ready!");
+    Serial.println("CNH K-Bus ready!");
 }
 
 //---Receive K_Bus message (for monitoring armrest button presses if needed)
@@ -62,6 +62,7 @@ void KBus_Receive() {
 
 //Press the Big Go button (headland start)
 void pressGo() {
+    return;
     if (!FENDT_KBUS_ENABLED) return;
     
     CAN_message_t buttonData;
@@ -92,6 +93,7 @@ void liftGo() {
 
 //Press the Big End button (headland end)
 void pressEnd() {
+    return;
     if (!FENDT_KBUS_ENABLED) return;
     
     CAN_message_t buttonData;
