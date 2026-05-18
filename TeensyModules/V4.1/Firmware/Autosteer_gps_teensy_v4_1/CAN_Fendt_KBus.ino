@@ -15,7 +15,7 @@ void KBus_setup(void) {
     Serial.println("Starting CNH (CAN1) at 250kbps...");
     
     K_Bus.begin();
-    K_Bus.setBaudRate(250000);  //Older Fendt models use 250kbps
+    K_Bus.setBaudRate(250000, LISTEN_ONLY);  //Older Fendt models use 250kbps
     K_Bus.enableFIFO();
     K_Bus.setFIFOFilter(REJECT_ALL);
     K_Bus.setFIFOFilter(0, 0x14FF7706, EXT);  //Fendt Arm Rest Buttons
@@ -41,6 +41,13 @@ void KBus_Receive() {
             //Button release detected
             kbusReading = HIGH;  //Released = HIGH
         }
+//return; enable this for the standard tractor
+        //This hydraulic joystick UP button
+        if (KBusReceiveData.buf[3] == 241) {
+            kbusReading = LOW;  //Pressed The hydraulic one
+        } else if (KBusReceiveData.buf[3] == 240) {
+            kbusReading = HIGH;  //Pressed The hydraulic one
+        }
     }
 }
 
@@ -49,7 +56,7 @@ void KBus_Receive() {
 //Press the Big Go button (headland start)
 void pressGo() {
     if (!FENDT_KBUS_ENABLED) return;
-    
+    return;
     CAN_message_t buttonData;
     buttonData.id = 0x14FF7706;
     buttonData.len = 8;
@@ -79,7 +86,7 @@ void liftGo() {
 //Press the Big End button (headland end)
 void pressEnd() {
     if (!FENDT_KBUS_ENABLED) return;
-    
+    return;
     CAN_message_t buttonData;
     buttonData.id = 0x14FF7706;
     buttonData.len = 8;
