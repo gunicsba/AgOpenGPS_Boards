@@ -43,7 +43,7 @@
 //Define sensor pin for current or pressure sensor
 #define CURRENT_SENSOR_PIN A17
 #define PRESSURE_SENSOR_PIN A10
-#define JOHNDEERE false
+#define JOHNDEERE true
 elapsedMicros dutyTime = 0;
 float dutyTimeCurrent = 0;
 float dutyTimePrev = 0;
@@ -184,7 +184,7 @@ void ISRJOHNDEERERISING(){
 
 void ISRJOHNDEEREFALLING(){
   attachInterrupt(digitalPinToInterrupt(PRESSURE_SENSOR_PIN), ISRJOHNDEERERISING, RISING);
-  dutyTimeCurrent = dutyTime;
+  dutyTimeCurrent = (dutyTimeCurrent * 0.95) + (dutyTime * 0.05);
   return;
 }
 
@@ -366,27 +366,9 @@ void autosteerLoop()
       if(JOHNDEERE){
         if(dutyTimeCurrent > 100 && dutyTimeCurrent < 4500) 
         {
-//          Serial.print(" , dutyTimeCurrent: ");
-//          Serial.print(dutyTimeCurrent);
-          //current dutyTime should be between 
-          if(abs(dutyTimeCurrent - dutyTimePrev) < 1000) // if it's more than 2000 we jumped...
-          {
-            sensorSample = abs((double)dutyTimeCurrent-2600)/5; //should make it into a smoother transition around 95 to 5 percent
-//            Serial.print(" , sensorSample: ");
-//            Serial.print(sensorSample);
-           sensorReading = (min(abs( ( abs((double)dutyTimePrev-2600)/5 ) - sensorSample),255) * 0.6) + (sensorReading * 0.4);
-//            Serial.print(" , sensorReading: ");
-//            Serial.println(sensorReading);
-          } else {
-            sensorReading = 0;
-//            Serial.print(" , sensorReading: ");
-//            Serial.println(sensorReading);
-          }
+          sensorSample = abs((double)dutyTimeCurrent-2600)/5; //should make it into a smoother transition around 95 to 5 percent
+          sensorReading = (min(abs( ( abs((double)dutyTimePrev-2600)/5 ) - sensorSample),255) * 0.6) + (sensorReading * 0.4);
           dutyTimePrev = dutyTimeCurrent;
-        } else {
-//          Serial.print(" , dutyTimeCurrent else: ");
-//          Serial.println(dutyTimeCurrent);
-          
         }
       } else {
       sensorSample = (float)analogRead(PRESSURE_SENSOR_PIN);
