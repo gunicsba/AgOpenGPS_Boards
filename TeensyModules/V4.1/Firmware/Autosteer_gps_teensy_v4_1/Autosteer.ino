@@ -184,7 +184,11 @@ void ISRJOHNDEERERISING(){
 
 void ISRJOHNDEEREFALLING(){
   attachInterrupt(digitalPinToInterrupt(PRESSURE_SENSOR_PIN), ISRJOHNDEERERISING, RISING);
-  dutyTimeCurrent = (dutyTimeCurrent * 0.95) + (dutyTime * 0.05);
+  if (dutyTimeCurrent == 0) {
+    dutyTimeCurrent = dutyTime;  // seed first reading, no ramp-up
+  } else {
+    dutyTimeCurrent = (dutyTimeCurrent * 0.95) + (dutyTime * 0.05);
+  }
   return;
 }
 
