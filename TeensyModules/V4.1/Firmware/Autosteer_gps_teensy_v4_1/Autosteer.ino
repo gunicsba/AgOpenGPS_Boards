@@ -43,7 +43,7 @@
 //Define sensor pin for current or pressure sensor
 #define CURRENT_SENSOR_PIN A17
 #define PRESSURE_SENSOR_PIN A10
-#define JOHNDEERE true
+#define JOHNDEERE false
 elapsedMicros dutyTime = 0;
 float dutyTimeCurrent = 0;
 float dutyTimePrev = 0;
@@ -93,6 +93,7 @@ int8_t PGN_250_Size = sizeof(PGN_250) - 1;
 uint8_t aog2Count = 0;
 float sensorReading;
 float sensorSample;
+elapsedMillis sensorPulseReset;
 
 elapsedMillis gpsSpeedUpdateTimer = 0;
 
@@ -182,9 +183,12 @@ void ISRJOHNDEERERISING(){
 }
 
 void ISRJOHNDEEREFALLING(){
-  if(dutyTime  < 50) return;
   attachInterrupt(digitalPinToInterrupt(PRESSURE_SENSOR_PIN), ISRJOHNDEERERISING, RISING);
-  dutyTimeCurrent = dutyTime;
+  if (dutyTimeCurrent == 0) {
+    dutyTimeCurrent = dutyTime;  // seed first reading, no ramp-up
+  } else {
+    dutyTimeCurrent = (dutyTimeCurrent * 0.95) + (dutyTime * 0.05);
+  }
   return;
 }
 
@@ -366,28 +370,9 @@ void autosteerLoop()
       if(JOHNDEERE){
         if(dutyTimeCurrent > 100 && dutyTimeCurrent < 4500) 
         {
-//          Serial.print(" , dutyTimeCurrent: ");
-//          Serial.print(dutyTimeCurrent);
-          //current dutyTime should be between 
-          if(abs(dutyTimeCurrent - dutyTimePrev) < 1000) // if it's more than 2000 we jumped...
-          {
-            sensorSample = abs((double)dutyTimeCurrent-2600)/5; //should make it into a smoother transition around 95 to 5 percent
-//            Serial.print(" , sensorSample: ");
-//            Serial.print(sensorSample);
-           sensorReading = abs( ( abs((double)dutyTimePrev-2600)/5 ) - sensorSample);
-//            Serial.print(" , sensorReading: ");
-//            Serial.println(sensorReading);
-            sensorReading = min(sensorReading,255);
-          } else {
-            sensorReading = 0;
-//            Serial.print(" , sensorReading: ");
-//            Serial.println(sensorReading);
-          }
+          sensorSample = abs((double)dutyTimeCurrent-2600)/5; //should make it into a smoother transition around 95 to 5 percent
+          sensorReading = (min(abs( ( abs((double)dutyTimePrev-2600)/5 ) - sensorSample),255) * 0.6) + (sensorReading * 0.4);
           dutyTimePrev = dutyTimeCurrent;
-        } else {
-//          Serial.print(" , dutyTimeCurrent else: ");
-//          Serial.println(dutyTimeCurrent);
-          
         }
       } else {
       sensorSample = (float)analogRead(PRESSURE_SENSOR_PIN);
@@ -768,7 +753,7 @@ void ReceiveUdp()
 
                 SendUdp(helloFromAutoSteer, sizeof(helloFromAutoSteer), Eth_ipDestination, portDestination);
                 }
-                if(useBNO08x || useCMPS)
+                if(useBNO08x || useCMPS || useTM171)
                 {
                  SendUdp(helloFromIMU, sizeof(helloFromIMU), Eth_ipDestination, portDestination); 
                 }
@@ -841,6 +826,9 @@ void EncoderFunc()
 {
   if (encEnable)
   {
+    //Reset counter to 0 if there wasn't any activity for 15 seconds
+    if(sensorPulseReset >= 10000 && steerConfig.PulseCountMax >= 3)  pulseCount = 0;
+    sensorPulseReset = 0;
     pulseCount++;
     encEnable = false;
   }

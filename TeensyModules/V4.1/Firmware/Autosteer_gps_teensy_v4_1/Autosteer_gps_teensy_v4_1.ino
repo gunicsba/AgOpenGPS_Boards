@@ -25,12 +25,17 @@
 // CFG-UART2-BAUDRATE 460800
 // Serial 2 In RTCM
 
+// Forward declarations for handlers
+void GGA_Handler();
+void VTG_Handler();
+void KSXT_Handler();
+
 /************************* User Settings *************************/
 // Serial Ports
 #define SerialAOG Serial                //AgIO USB conection
 #define SerialRTK Serial3               //RTK radio
-HardwareSerial* SerialGPS = &Serial7;   //Main postion receiver (GGA) (Serial2 must be used here with T4.0 / Basic Panda boards - Should auto swap)
-HardwareSerial* SerialGPS2 = &Serial2;  //Dual heading receiver 
+HardwareSerial* SerialGPS = &Serial7; //7  //Main postion receiver (GGA) (Serial2 must be used here with T4.0 / Basic Panda boards - Should auto swap)
+HardwareSerial* SerialGPS2 = &Serial2;  //2 Dual heading receiver 
 HardwareSerial* SerialGPSTmp = NULL;
 //HardwareSerial* SerialAOG = &Serial;
 
@@ -143,6 +148,11 @@ bool dualReadyRelPos = false;
 // booleans to see if we are using CMPS or BNO08x
 bool useCMPS = false;
 bool useBNO08x = false;
+bool useTM171 = false;
+
+elapsedMillis TM171lastData;
+elapsedMillis imuTimer;
+bool imuTrigger = false;
 
 //CMPS always x60
 #define CMPS14_ADDRESS 0x60
@@ -172,8 +182,9 @@ uint8_t GPS2rxbuffer[serial_buffer_size];   //Extra serial rx buffer
 uint8_t GPS2txbuffer[serial_buffer_size];   //Extra serial tx buffer
 uint8_t RTKrxbuffer[serial_buffer_size];    //Extra serial rx buffer
 
-/* A parser is declared with 3 handlers at most */
-NMEAParser<2> parser;
+
+/* A parser is declared with 5 handlers at most */
+NMEAParser<5> parser;
 
 bool isTriggered = false;
 bool blink = false;
@@ -243,11 +254,41 @@ void setup()
   parser.setErrorHandler(errorHandler);
   parser.addHandler("G-GGA", GGA_Handler);
   parser.addHandler("G-VTG", VTG_Handler);
+  parser.addHandler("KSXT-", KSXT_Handler);
 
   delay(10);
   Serial.begin(baudAOG);
   delay(10);
   Serial.println("Start setup");
+
+  Serial.println("Detecting GNSS port (Serial2 / Serial7)...");
+  bool foundGnssOnSerial2 = detectGGAOnPort(&Serial2, 300);
+  bool foundGnssOnSerial7 = false;
+
+  if (!foundGnssOnSerial2)
+  {
+    foundGnssOnSerial7 = detectGGAOnPort(&Serial7, 300);
+  }
+
+  if (foundGnssOnSerial7)
+  {
+    Serial.println("GNSS detected on Serial7");
+    SerialGPS = &Serial7;
+    SerialGPS2 = &Serial2;
+  }
+  else
+  {
+    if (foundGnssOnSerial2)
+    {
+      Serial.println("GNSS detected on Serial2");
+    }
+    else
+    {
+      Serial.println("GNSS not detected on Serial2 or Serial7, using defaults");
+    }
+    SerialGPS = &Serial2;
+    SerialGPS2 = &Serial5;
+  }
 
   SerialGPS->begin(baudGPS);
   SerialGPS->addMemoryForRead(GPSrxbuffer, serial_buffer_size);
@@ -341,6 +382,43 @@ void setup()
           }
           if (useBNO08x) break;
       }
+
+        Serial.println("\r\nChecking for TM171 on Serial7 / Serial5");
+
+        bool foundTM171 = false;
+        HardwareSerial* gnssMain = SerialGPS;
+
+        if (&Serial7 != gnssMain)
+        {
+            if (TM171detectOnPort(&Serial7, 1500))
+            {
+                Serial.println("Received data from TM171 on Serial7");
+                foundTM171 = true;
+            }
+        }
+
+        if (!foundTM171 && &Serial5 != gnssMain)
+        {
+            if (TM171detectOnPort(&Serial5, 1500))
+            {
+                Serial.println("Received data from TM171 on Serial5");
+                foundTM171 = true;
+
+                if (SerialGPS2 == &Serial5)
+                {
+                    SerialGPS2 = &Serial2;
+                }
+            }
+        }
+
+        if (foundTM171)
+        {
+            useTM171 = true;
+        }
+        else
+        {
+            Serial.println("TM171 not Connected or Found");
+        }
   }
 
   delay(100);
@@ -348,6 +426,8 @@ void setup()
   Serial.println(useCMPS);
   Serial.print("useBNO08x = ");
   Serial.println(useBNO08x);
+  Serial.print("useTM171 = ");
+  Serial.println(useTM171);
 
   Serial.println("\r\nEnd setup, waiting for GPS...\r\n");
 }
@@ -581,13 +661,15 @@ void loop()
     // Read incoming nmea from GPS
     if (SerialGPS->available())
     {
+        char c = SerialGPS->read();
+        
         if (passThroughGPS)
         {
-            SerialAOG.write(SerialGPS->read());
+            SerialAOG.write(c);
         }
         else
         {
-            parser << SerialGPS->read();
+            parser << c;
         }
     }
 
@@ -668,6 +750,13 @@ void loop()
       READ_BNO_TIME = systick_millis_count;
       readBNO();
     }
+
+    TM171process();
+    if(useTM171 && imuTimer > 70 && imuTrigger) 
+    {
+      imuTrigger = false;
+      imuHandler();
+    }
     
     if (Autosteer_running) autosteerLoop();
     else ReceiveUdp();
@@ -684,6 +773,64 @@ void loop()
   }
 }//End Loop
 //**************************************************************************
+
+bool detectGGAOnPort(HardwareSerial* port, uint32_t detectionMs)
+{
+    const char* pattern1 = "$GNGGA";
+    const char* pattern2 = "$GPGGA";
+    uint8_t idx1 = 0;
+    uint8_t idx2 = 0;
+
+    port->begin(baudGPS);
+    delay(100);
+
+    while (port->available())
+    {
+        port->read();
+    }
+
+    uint32_t start = millis();
+
+    while (millis() - start < detectionMs)
+    {
+        while (port->available())
+        {
+            char c = port->read();
+
+            if (c == pattern1[idx1])
+            {
+                idx1++;
+                if (pattern1[idx1] == '\0')
+                {
+                    port->end();
+                    return true;
+                }
+            }
+            else
+            {
+                idx1 = (c == pattern1[0]) ? 1 : 0;
+            }
+
+            if (c == pattern2[idx2])
+            {
+                idx2++;
+                if (pattern2[idx2] == '\0')
+                {
+                    port->end();
+                    return true;
+                }
+            }
+            else
+            {
+                idx2 = (c == pattern2[0]) ? 1 : 0;
+            }
+        }
+    }
+
+    port->end();
+
+    return false;
+}
 
 bool calcChecksum()
 {
