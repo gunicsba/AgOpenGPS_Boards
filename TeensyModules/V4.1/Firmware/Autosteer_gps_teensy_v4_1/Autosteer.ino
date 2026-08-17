@@ -50,6 +50,11 @@ float dutyTimePrev = 0;
 
 #define CONST_180_DIVIDED_BY_PI 57.2957795130823
 
+// Forward declarations for CAN_SASA.ino (compiled after Autosteer.ino alphabetically)
+extern int16_t canSteeringWheelSpeed;
+void CAN_SASA_Read();
+void CAN_SASA_Setup();
+
 #include <Wire.h>
 #include <EEPROM.h>
 #include "zADS1115.h"
@@ -295,6 +300,9 @@ void autosteerSetup()
 
 void autosteerLoop()
 {
+  // Read SASA CAN messages every cycle (async, non-blocking)
+  CAN_SASA_Read();
+
 #ifdef ARDUINO_TEENSY41
   ReceiveUdp();
 #endif
@@ -374,10 +382,21 @@ void autosteerLoop()
           sensorReading = (min(abs( ( abs((double)dutyTimePrev-2600)/5 ) - sensorSample),255) * 0.6) + (sensorReading * 0.4);
           dutyTimePrev = dutyTimeCurrent;
         }
-      } else {
-      sensorSample = (float)analogRead(PRESSURE_SENSOR_PIN);
-      sensorSample *= 0.25;
-      sensorReading = sensorReading * 0.6 + sensorSample * 0.4;
+      }
+      else if (canSteeringWheelSpeed != 0) {
+        // SASA CAN: bytes 2-3 = signed rotation speed (positive/negative = direction)
+        sensorSample = (float)abs(canSteeringWheelSpeed);
+        sensorReading = sensorReading * 0.9 + sensorSample * 0.1;
+      }
+      else if (sensorReading > 2.0) {
+        // Wheel stopped but EMA still has residual value - decay quickly to 0
+        sensorReading *= 0.75;
+      }
+      else {
+        sensorReading = 0;
+        sensorSample = (float)analogRead(PRESSURE_SENSOR_PIN);
+        sensorSample *= 0.25;
+        sensorReading = sensorReading * 0.6 + sensorSample * 0.4;
       }
 
       if (sensorReading >= steerConfig.PulseCountMax)

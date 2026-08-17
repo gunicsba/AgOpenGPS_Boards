@@ -30,6 +30,9 @@ void GGA_Handler();
 void VTG_Handler();
 void KSXT_Handler();
 
+// Forward declarations for CAN_SASA.ino
+void CAN_SASA_Setup();
+
 /************************* User Settings *************************/
 // Serial Ports
 #define SerialAOG Serial                //AgIO USB conection
@@ -307,6 +310,9 @@ void setup()
 
   Serial.println("\r\nStarting AutoSteer...");
   autosteerSetup();
+
+  Serial.println("\r\nStarting CAN SASA listener...");
+  CAN_SASA_Setup();
   
   Serial.println("\r\nStarting Ethernet...");
   EthernetStart();
@@ -382,7 +388,7 @@ void setup()
           }
           if (useBNO08x) break;
       }
-
+        delay(700);
         Serial.println("\r\nChecking for TM171 on Serial7 / Serial5");
 
         bool foundTM171 = false;
