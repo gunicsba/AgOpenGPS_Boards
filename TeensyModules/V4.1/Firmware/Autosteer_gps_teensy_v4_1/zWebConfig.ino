@@ -66,7 +66,7 @@ static void sendOK(EthernetClient& c, const char* contentType)
 static void sendRedirect(EthernetClient& c)
 {
   c.println("HTTP/1.1 303 See Other");
-  c.println("Location: /");
+  c.println("Location: /setup");
   c.println("Connection: close");
   c.println();
 }
@@ -254,16 +254,17 @@ static void rowToggle(EthernetClient& c,
 }
 
 // -----------------------------------------------------------------
-// Main HTML page
+// Shared head/CSS + nav. Split into two pages on purpose: Status auto-refreshes (nothing on
+// it is ever mid-edit, so reloading it is always safe) and Setup never reloads itself (so a
+// dropdown or slider you're in the middle of choosing can never get wiped out from under you).
 // -----------------------------------------------------------------
-static void sendPage(EthernetClient& c)
+static void sendHead(EthernetClient& c, const char* title, bool autoRefresh)
 {
-  sendOK(c, "text/html");
-
   c.println("<!DOCTYPE html><html><head>");
   c.println("<meta charset='utf-8'>");
   c.println("<meta name='viewport' content='width=device-width,initial-scale=1'>");
-  c.println("<title>AgOpenGPS Board Config</title>");
+  if (autoRefresh) c.println("<meta http-equiv='refresh' content='4'>");
+  c.print("<title>"); c.print(title); c.println("</title>");
   c.println("<style>");
   c.println("*{box-sizing:border-box}");
   c.println("body{font-family:sans-serif;max-width:560px;margin:20px auto;padding:0 14px;background:#1a1a2e;color:#eee}");
@@ -308,9 +309,30 @@ static void sendPage(EthernetClient& c)
   c.println(".emaval{font-size:.9em;font-weight:bold;color:#a0a0f0;min-width:36px;text-align:right}");
   c.println(".emabadge{font-size:.7em;padding:2px 7px;border-radius:10px;margin-left:4px}");
   c.println(".off{background:#333;color:#777}.on{background:#2a2a6a;color:#a0a0f0}");
+  c.println(".nav{display:flex;gap:8px;margin-bottom:14px}");
+  c.println(".nav a{flex:1;text-align:center;padding:9px;border-radius:6px;text-decoration:none;font-size:.88em;color:#bbb;background:#16213e}");
+  c.println(".nav a.active{background:#e94560;color:#fff;font-weight:bold}");
   c.println("</style></head><body>");
 
   c.println("<h1>&#9881; AgOpenGPS Board Config</h1>");
+}
+
+static void sendNav(EthernetClient& c, bool statusActive)
+{
+  c.print("<div class='nav'>");
+  c.print("<a href='/'");      if (statusActive)  c.print(" class='active'"); c.print(">&#128202; Status</a>");
+  c.print("<a href='/setup'"); if (!statusActive) c.print(" class='active'"); c.print(">&#9881; Setup</a>");
+  c.println("</div>");
+}
+
+// -----------------------------------------------------------------
+// Status page - auto-refreshes every 4s, no inputs, nothing to lose on a reload.
+// -----------------------------------------------------------------
+static void sendStatusPage(EthernetClient& c)
+{
+  sendOK(c, "text/html");
+  sendHead(c, "AgOpenGPS Board Status", true);
+  sendNav(c, true);
 
   // ---- LIVE STATUS ----
   c.print("<div class='status'>");
@@ -365,6 +387,19 @@ static void sendPage(EthernetClient& c)
 
     c.println("</div>");
   }
+
+  c.println("</body></html>");
+}
+
+// -----------------------------------------------------------------
+// Setup page - the only place with a form. Never auto-refreshes, so there's no reload to
+// race against while picking a dropdown or dragging a slider - just save when you're ready.
+// -----------------------------------------------------------------
+static void sendSetupPage(EthernetClient& c)
+{
+  sendOK(c, "text/html");
+  sendHead(c, "AgOpenGPS Board Setup", false);
+  sendNav(c, false);
 
   c.println("<form method='POST' action='/save'>");
 
@@ -604,22 +639,8 @@ static void sendPage(EthernetClient& c)
   // SAVE BUTTON
   // ================================================================
   c.println("<button type='submit'>&#128190; Save to EEPROM</button>");
-  c.println("<p class='foot' id='stlbl'>Status refreshes every 5s</p>");
+  c.println("<p class='foot'>This page never reloads on its own - check the Status tab for live values.</p>");
   c.println("</form>");
-
-  c.println("<script>");
-  c.println("var rt,dirty=false;");
-  c.println("function go(){if(!dirty)rt=setTimeout(()=>{if(!dirty)location.reload();},5000);}");
-  c.println("document.querySelectorAll('input').forEach(el=>{");
-  c.println("  el.addEventListener('change',()=>{");
-  c.println("    dirty=true;clearTimeout(rt);");
-  c.println("    document.getElementById('stlbl').textContent='[editing - refresh paused]';");
-  c.println("    document.getElementById('stlbl').style.color='#e94560';");
-  c.println("  });");
-  c.println("});");
-  c.println("document.querySelector('form').addEventListener('submit',()=>{dirty=false;});");
-  c.println("go();");
-  c.println("</script>");
   c.println("</body></html>");
 }
 
@@ -676,8 +697,10 @@ void webConfigLoop()
   if (isPost && body.length() > 0) {
     needsReboot = handlePost(body);
     sendRedirect(client);
+  } else if (requestLine.indexOf("/setup") >= 0) {
+    sendSetupPage(client);
   } else {
-    sendPage(client);
+    sendStatusPage(client);
   }
 
   delay(1);
