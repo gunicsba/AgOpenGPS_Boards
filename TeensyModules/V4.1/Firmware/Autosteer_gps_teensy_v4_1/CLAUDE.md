@@ -15,8 +15,7 @@ here exists because of a specific bug or hardware constraint discovered the hard
   branch of this repo) — the web config server and the "wasless" auto-zero engine (Keya's own
   CAN encoder used as a virtual WAS instead of the ADS1115 pot).
 - **`AOG_CAN_Teensy4.1/Autosteer_AOGv5_Teensy4.1UDP_SteerReadyCAN`** (separate repo/folder) —
-  dual-path engage model (physical button + tablet button both live at once). **Not yet
-  ported** — still a planned phase.
+  dual-path engage model (physical button + tablet button both live at once). Ported.
 
 Full design rationale and diagrams: ask about the "Unified Autosteer Firmware" RFC artifact if
 you need the original reviewed proposal; the phase history in `git log` on this branch is the
@@ -136,12 +135,20 @@ and add a row to this table in the same commit.
 - **Settings loss on the `EEP_Ident` bump to 2500 was accepted**, not a bug to fix — hydraulic
   lift and steer settings reset to firmware defaults on that one upgrade; nothing here tries
   to migrate the old layout byte-for-byte.
-- **Engage logic is still the old branch-on-switch-type model** (`SteerSwitch`/`SteerButton`/
-  neither). The planned replacement (always-on physical button *and* tablet button, ported
-  from the `SteerReadyCAN` folder) has been discussed but not implemented — this fleet uses
-  momentary buttons only (no toggle switches), and buttons are a known field failure point, so
-  not gating the tablet engage behind physical-button health is the intended direction once
-  that phase lands.
+- **Engage is always-on dual path, not the old branch-on-switch-type model.** The physical
+  button (`STEERSW_PIN`) and the tablet's onscreen button (`guidanceStatus` bit 0) are both
+  read every cycle in `autosteerLoop()`, regardless of AOG's `SteerSwitch`/`SteerButton`
+  setting — deliberately, ported from `SteerReadyCAN`. This fleet wires momentary buttons only
+  (no toggle switches), and buttons are a known field failure point, so not gating the tablet
+  engage behind physical-button health is the point, not an oversight. The two inputs are
+  handled differently because they're shaped differently: the physical button is a momentary
+  press (toggles `currentState`/`steerSwitch` on each press-edge), the tablet button is a
+  level (`guidanceStatus` bit 0 directly reflects AOG's desired state, so it's mirrored onto
+  the same latch on each change rather than toggled). `steerConfig.SteerSwitch`/`SteerButton`
+  are still parsed from AOG's PGN 251 (can't change AOG's own UI) but no longer consulted for
+  engage logic — this is what the RFC's "Keya can't engage under None" open question expected
+  to resolve as a side effect, since the branch it lived in doesn't exist anymore; not
+  independently re-verified on hardware after the rewrite, just structurally true.
 - **OTA firmware updates are not implemented.** Planned approach is FlasherX (writes to the
   Teensy 4.1's onboard QSPI flash) plus a `POST /update` route on the existing web server —
   needs its own safety spike (rollback on a bad image) before it's trusted in the field.

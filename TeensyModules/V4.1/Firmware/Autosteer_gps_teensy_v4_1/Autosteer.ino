@@ -454,44 +454,47 @@ void autosteerLoop()
     //read all the switches
     workSwitch = digitalRead(WORKSW_PIN);  // read work switch
 
-    if (steerConfig.SteerSwitch == 1)         //steer switch on - off
+    // Engage: physical button and the tablet's onscreen button are both always live,
+    // regardless of AOG's switch-type setting (SteerSwitch/SteerButton/None) - deliberately,
+    // not an oversight. This fleet wires momentary buttons only (no toggle switches), and
+    // buttons are a known field failure point: if the physical one breaks, the tablet button
+    // still fully engages/disengages on its own, and vice versa. Ported from the dual-path
+    // model in SteerReadyCAN. steerConfig.SteerSwitch/SteerButton are still parsed from AOG's
+    // PGN 251 (can't change AOG's own UI) but no longer consulted here.
+    //
+    // The two inputs have different shapes and are handled accordingly: the physical button
+    // is a momentary press, so it toggles currentState/steerSwitch on each press-edge. The
+    // tablet button is a level (guidanceStatus bit 0 directly reflects AOG's desired engage
+    // state), so it sets currentState/steerSwitch to match on each change rather than
+    // toggling. Both write the same latch, so whichever acted most recently wins, and the
+    // other input picks up correctly from there afterward.
+    reading = digitalRead(STEERSW_PIN);
+    if (reading == LOW && previous == HIGH)
     {
-      steerSwitch = digitalRead(STEERSW_PIN); //read auto steer enable switch open = 0n closed = Off
-    }
-    else if (steerConfig.SteerButton == 1)    //steer Button momentary
-    {
-      reading = digitalRead(STEERSW_PIN);
-      if (reading == LOW && previous == HIGH)
+      if (currentState == 1)
       {
-        if (currentState == 1)
-        {
-          currentState = 0;
-          steerSwitch = 0;
-        }
-        else
-        {
-          currentState = 1;
-          steerSwitch = 1;
-        }
-      }
-      previous = reading;
-    }
-    else                                      // No steer switch and no steer button
-    {
-      // So set the correct value. When guidanceStatus = 1,
-      // it should be on because the button is pressed in the GUI
-      // But the guidancestatus should have set it off first
-      if (guidanceStatusChanged && guidanceStatus == 1 && steerSwitch == 1 && previous == 0)
-      {
+        currentState = 0;
         steerSwitch = 0;
-        previous = 1;
       }
-
-      // This will set steerswitch off and make the above check wait until the guidanceStatus has gone to 0
-      if (guidanceStatusChanged && guidanceStatus == 0 && steerSwitch == 0 && previous == 1)
+      else
       {
+        currentState = 1;
         steerSwitch = 1;
-        previous = 0;
+      }
+    }
+    previous = reading;
+
+    if (guidanceStatusChanged)
+    {
+      if (bitRead(guidanceStatus, 0) == 1)
+      {
+        steerSwitch   = 0;
+        currentState  = 0;
+      }
+      else
+      {
+        steerSwitch   = 1;
+        currentState  = 1;
       }
     }
 
