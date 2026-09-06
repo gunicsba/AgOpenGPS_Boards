@@ -120,23 +120,20 @@ static bool handlePost(const String& body)
     EEPROM.put(EEPROM_ADDR_PRESSURE_MAX_HZ, pressureSensorMaxHz);
   }
 
-  // ---- Board setup: serial port assignment ----
-  uint8_t newGpsCount = (uint8_t)extractFloat(body, "gpsCount",  portConfig.gpsCount);
-  uint8_t newGps1     = (uint8_t)extractFloat(body, "gps1Port",  portConfig.gps1Port);
-  uint8_t newGps2     = (uint8_t)extractFloat(body, "gps2Port",  portConfig.gps2Port);
-  uint8_t newTm171    = (uint8_t)extractFloat(body, "tm171Port", portConfig.tm171Port);
-  newGpsCount = (newGpsCount == 2) ? 2 : 1;
-  if (newGps1  > SERIAL_PORT_7) newGps1  = SERIAL_PORT_AUTO;
-  if (newGps2  > SERIAL_PORT_7) newGps2  = SERIAL_PORT_AUTO;
-  if (newTm171 > SERIAL_PORT_7) newTm171 = SERIAL_PORT_AUTO;
+  // ---- Board setup: serial port assignment (per-port role, see main .ino) ----
+  uint8_t newSerial2Role = (uint8_t)extractFloat(body, "serial2Role", portConfig.serial2Role);
+  uint8_t newSerial5Role = (uint8_t)extractFloat(body, "serial5Role", portConfig.serial5Role);
+  uint8_t newSerial7Role = (uint8_t)extractFloat(body, "serial7Role", portConfig.serial7Role);
+  if (newSerial2Role > PORT_ROLE_UNUSED) newSerial2Role = PORT_ROLE_AUTO;
+  if (newSerial5Role > PORT_ROLE_UNUSED) newSerial5Role = PORT_ROLE_AUTO;
+  if (newSerial7Role > PORT_ROLE_UNUSED) newSerial7Role = PORT_ROLE_AUTO;
 
-  if (newGpsCount != portConfig.gpsCount || newGps1 != portConfig.gps1Port ||
-      newGps2 != portConfig.gps2Port || newTm171 != portConfig.tm171Port)
+  if (newSerial2Role != portConfig.serial2Role || newSerial5Role != portConfig.serial5Role ||
+      newSerial7Role != portConfig.serial7Role)
   {
-    portConfig.gpsCount  = newGpsCount;
-    portConfig.gps1Port  = newGps1;
-    portConfig.gps2Port  = newGps2;
-    portConfig.tm171Port = newTm171;
+    portConfig.serial2Role = newSerial2Role;
+    portConfig.serial5Role = newSerial5Role;
+    portConfig.serial7Role = newSerial7Role;
     portConfigSave();
     needsReboot = true;
   }
@@ -430,31 +427,34 @@ static void sendSetupPage(EthernetClient& c)
 
   c.println("<hr class='sep'>");
 
-  rowSelectStart(c, "GPS receivers", "gpsCount");
-  rowSelectOption(c, "1", "1 (single antenna)", portConfig.gpsCount == 1);
-  rowSelectOption(c, "2", "2 (dual antenna)", portConfig.gpsCount == 2);
+  c.print("<div class='desc' style='color:#888;margin-bottom:9px'>");
+  c.print("Pick what's expected on each port rather than picking a port for each module - ");
+  c.print("leave a port on Auto-detect unless it's guessing wrong for your wiring.");
+  c.println("</div>");
+
+  rowSelectStart(c, "Serial2", "serial2Role");
+  rowSelectOption(c, "0", "Auto-detect", portConfig.serial2Role == 0);
+  rowSelectOption(c, "1", "GPS 1", portConfig.serial2Role == 1);
+  rowSelectOption(c, "2", "GPS 2", portConfig.serial2Role == 2);
+  rowSelectOption(c, "3", "TM171 IMU", portConfig.serial2Role == 3);
+  rowSelectOption(c, "4", "Unused", portConfig.serial2Role == 4);
   rowSelectEnd(c, "");
 
-  rowSelectStart(c, "GPS 1 port", "gps1Port");
-  rowSelectOption(c, "0", "Auto-detect", portConfig.gps1Port == 0);
-  rowSelectOption(c, "1", "Serial2", portConfig.gps1Port == 1);
-  rowSelectOption(c, "2", "Serial5", portConfig.gps1Port == 2);
-  rowSelectOption(c, "3", "Serial7", portConfig.gps1Port == 3);
+  rowSelectStart(c, "Serial5", "serial5Role");
+  rowSelectOption(c, "0", "Auto-detect", portConfig.serial5Role == 0);
+  rowSelectOption(c, "1", "GPS 1", portConfig.serial5Role == 1);
+  rowSelectOption(c, "2", "GPS 2", portConfig.serial5Role == 2);
+  rowSelectOption(c, "3", "TM171 IMU", portConfig.serial5Role == 3);
+  rowSelectOption(c, "4", "Unused", portConfig.serial5Role == 4);
   rowSelectEnd(c, "");
 
-  rowSelectStart(c, "GPS 2 port", "gps2Port");
-  rowSelectOption(c, "0", "Auto-detect", portConfig.gps2Port == 0);
-  rowSelectOption(c, "1", "Serial2", portConfig.gps2Port == 1);
-  rowSelectOption(c, "2", "Serial5", portConfig.gps2Port == 2);
-  rowSelectOption(c, "3", "Serial7", portConfig.gps2Port == 3);
-  rowSelectEnd(c, "Only used when GPS receivers above is 2.");
-
-  rowSelectStart(c, "TM171 IMU port", "tm171Port");
-  rowSelectOption(c, "0", "Auto-detect", portConfig.tm171Port == 0);
-  rowSelectOption(c, "1", "Serial2", portConfig.tm171Port == 1);
-  rowSelectOption(c, "2", "Serial5", portConfig.tm171Port == 2);
-  rowSelectOption(c, "3", "Serial7", portConfig.tm171Port == 3);
-  rowSelectEnd(c, "Leave on Auto-detect unless it isn't finding your TM171 - then pick the port it's actually wired to. A manual pick is also tried even if a CMPS/BNO was already found (auto-detect skips the TM171 probe in that case).");
+  rowSelectStart(c, "Serial7", "serial7Role");
+  rowSelectOption(c, "0", "Auto-detect", portConfig.serial7Role == 0);
+  rowSelectOption(c, "1", "GPS 1", portConfig.serial7Role == 1);
+  rowSelectOption(c, "2", "GPS 2", portConfig.serial7Role == 2);
+  rowSelectOption(c, "3", "TM171 IMU", portConfig.serial7Role == 3);
+  rowSelectOption(c, "4", "Unused", portConfig.serial7Role == 4);
+  rowSelectEnd(c, "TM171's factory default wiring is Serial7 - if auto-detect isn't finding it, try pinning it here explicitly. A manual pick is tried even if a CMPS/BNO was already found (auto-detect skips the TM171 probe in that case). Don't assign the same role to two ports.");
 
   c.println("<hr class='sep'>");
 

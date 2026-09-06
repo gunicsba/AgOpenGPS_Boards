@@ -158,49 +158,73 @@ elapsedMillis imuTimer;
 bool imuTrigger = false;
 
 // ---- Serial port assignment (Board Setup page, zWebConfig.ino) ----
-// AUTO preserves the existing auto-detect behavior; an explicit value skips detection
-// entirely for that role. Lets an installer route around detection order-effects (e.g. a
-// CMPS14 false-detect blocking the TM171 probe) or a receiver too slow for the auto window.
+// Per-port, not per-module: pick what's expected on each of the three flexible ports
+// (Serial2/5/7) rather than picking a port for each module. With exactly 3 ports and up
+// to 3 roles that can live on them, this maps more directly onto "what's plugged in where"
+// and avoids needing a separate GPS-count field - GPS2 simply exists if some port claims it.
+// AUTO on a given port preserves today's auto-detect behavior for whatever role ends up
+// there; an explicit role skips detection for that port entirely. This is what lets an
+// installer route around detection order-effects (e.g. a CMPS14 false-detect blocking the
+// TM171 probe) or a receiver too slow for the auto-detect window.
 #include <EEPROM.h>
-#define SERIAL_PORT_AUTO 0
-#define SERIAL_PORT_2    1
-#define SERIAL_PORT_5    2
-#define SERIAL_PORT_7    3
+#define PORT_ROLE_AUTO   0
+#define PORT_ROLE_GPS1   1
+#define PORT_ROLE_GPS2   2
+#define PORT_ROLE_TM171  3
+#define PORT_ROLE_UNUSED 4
 #define EEPROM_ADDR_PORT_CONFIG 200
 
 struct PortConfig {
-  uint8_t  gpsCount  = 1;               // 1 or 2 GPS receivers
-  uint8_t  gps1Port  = SERIAL_PORT_AUTO;
-  uint8_t  gps2Port  = SERIAL_PORT_AUTO; // only used when gpsCount == 2
-  uint8_t  tm171Port = SERIAL_PORT_AUTO;
-  uint16_t ident     = 0xC0F1;
+  uint8_t  serial2Role = PORT_ROLE_AUTO;
+  uint8_t  serial5Role = PORT_ROLE_AUTO;
+  uint8_t  serial7Role = PORT_ROLE_AUTO;
+  uint16_t ident       = 0xC0F2;
 }; PortConfig portConfig;
 
-HardwareSerial* portFromConfig(uint8_t v, HardwareSerial* autoDefault)
+const char* portLabel(HardwareSerial* p)
 {
-  switch (v) {
-    case SERIAL_PORT_2: return &Serial2;
-    case SERIAL_PORT_5: return &Serial5;
-    case SERIAL_PORT_7: return &Serial7;
-    default:            return autoDefault;
+  if (p == &Serial2) return "Serial2";
+  if (p == &Serial5) return "Serial5";
+  if (p == &Serial7) return "Serial7";
+  return "?";
+}
+
+const char* portRoleName(uint8_t role)
+{
+  switch (role) {
+    case PORT_ROLE_GPS1:   return "GPS 1";
+    case PORT_ROLE_GPS2:   return "GPS 2";
+    case PORT_ROLE_TM171:  return "TM171 IMU";
+    case PORT_ROLE_UNUSED: return "Unused";
+    default:               return "Auto-detect";
   }
 }
 
-const char* portName(uint8_t v)
+// First physical port (in Serial2, Serial5, Serial7 order) explicitly assigned this role,
+// or NULL if none is - i.e. NULL means "let auto-detect decide", same as before.
+HardwareSerial* portPinnedTo(uint8_t role)
 {
-  switch (v) {
-    case SERIAL_PORT_2: return "Serial2";
-    case SERIAL_PORT_5: return "Serial5";
-    case SERIAL_PORT_7: return "Serial7";
-    default:            return "Auto";
-  }
+  if (portConfig.serial2Role == role) return &Serial2;
+  if (portConfig.serial5Role == role) return &Serial5;
+  if (portConfig.serial7Role == role) return &Serial7;
+  return NULL;
+}
+
+// True if this port's role is AUTO - i.e. it's fair game for auto-detect to use, as opposed
+// to a port explicitly pinned to a *different* role, which auto-detect must leave alone.
+bool portIsFree(HardwareSerial* p)
+{
+  uint8_t role = (p == &Serial2) ? portConfig.serial2Role
+               : (p == &Serial5) ? portConfig.serial5Role
+               : portConfig.serial7Role;
+  return role == PORT_ROLE_AUTO;
 }
 
 void portConfigLoad()
 {
   PortConfig saved;
   EEPROM.get(EEPROM_ADDR_PORT_CONFIG, saved);
-  if (saved.ident == 0xC0F1) portConfig = saved;
+  if (saved.ident == 0xC0F2) portConfig = saved;
   else EEPROM.put(EEPROM_ADDR_PORT_CONFIG, portConfig);
 }
 
@@ -325,28 +349,21 @@ void setup()
 
   portConfigLoad();
 
-  if (portConfig.gps1Port != SERIAL_PORT_AUTO)
-  {
-    SerialGPS = portFromConfig(portConfig.gps1Port, &Serial2);
-    Serial.print("GPS1 manually assigned to "); Serial.println(portName(portConfig.gps1Port));
+  HardwareSerial* pinnedGps1 = portPinnedTo(PORT_ROLE_GPS1);
+  HardwareSerial* pinnedGps2 = portPinnedTo(PORT_ROLE_GPS2);
 
-    if (portConfig.gpsCount == 2 && portConfig.gps2Port != SERIAL_PORT_AUTO)
-    {
-      SerialGPS2 = portFromConfig(portConfig.gps2Port, &Serial5);
-      Serial.print("GPS2 manually assigned to "); Serial.println(portName(portConfig.gps2Port));
-    }
-    else
-    {
-      SerialGPS2 = (SerialGPS == &Serial7) ? &Serial2 : &Serial5;
-    }
+  if (pinnedGps1)
+  {
+    SerialGPS = pinnedGps1;
+    Serial.print("GPS1 manually assigned to "); Serial.println(portLabel(pinnedGps1));
   }
   else
   {
     Serial.println("Detecting GNSS port (Serial2 / Serial7)...");
-    bool foundGnssOnSerial2 = detectGGAOnPort(&Serial2, 300);
+    bool foundGnssOnSerial2 = portIsFree(&Serial2) && detectGGAOnPort(&Serial2, 300);
     bool foundGnssOnSerial7 = false;
 
-    if (!foundGnssOnSerial2)
+    if (!foundGnssOnSerial2 && portIsFree(&Serial7))
     {
       foundGnssOnSerial7 = detectGGAOnPort(&Serial7, 300);
     }
@@ -355,21 +372,42 @@ void setup()
     {
       Serial.println("GNSS detected on Serial7");
       SerialGPS = &Serial7;
-      SerialGPS2 = &Serial2;
+    }
+    else if (foundGnssOnSerial2)
+    {
+      Serial.println("GNSS detected on Serial2");
+      SerialGPS = &Serial2;
     }
     else
     {
-      if (foundGnssOnSerial2)
-      {
-        Serial.println("GNSS detected on Serial2");
-      }
-      else
-      {
-        Serial.println("GNSS not detected on Serial2 or Serial7, using defaults");
-      }
-      SerialGPS = &Serial2;
-      SerialGPS2 = &Serial5;
+      Serial.println("GNSS not detected on Serial2 or Serial7, using default");
+      SerialGPS = portIsFree(&Serial2) ? &Serial2 : &Serial7;
     }
+  }
+
+  // SerialGPS2 always needs a valid pointer (its ports get begin()'d unconditionally below),
+  // even on a single-antenna board - prefer an explicitly pinned GPS2, otherwise pick
+  // whatever's left over that isn't SerialGPS and isn't reserved for something else.
+  if (pinnedGps2)
+  {
+    SerialGPS2 = pinnedGps2;
+    Serial.print("GPS2 manually assigned to "); Serial.println(portLabel(pinnedGps2));
+  }
+  else if (portIsFree(&Serial2) && &Serial2 != SerialGPS)
+  {
+    SerialGPS2 = &Serial2;
+  }
+  else if (portIsFree(&Serial5) && &Serial5 != SerialGPS)
+  {
+    SerialGPS2 = &Serial5;
+  }
+  else if (portIsFree(&Serial7) && &Serial7 != SerialGPS)
+  {
+    SerialGPS2 = &Serial7;
+  }
+  else
+  {
+    SerialGPS2 = (SerialGPS == &Serial7) ? &Serial2 : &Serial5; // last resort, matches old behavior
   }
 
   SerialGPS->begin(baudGPS);
@@ -472,18 +510,20 @@ void setup()
   // TM171 detection: a manual port assignment always wins and is tried regardless of
   // whether a CMPS/BNO was found (previously TM171 was never even probed once a CMPS
   // falsely ACKed on the I2C bus, since the whole block was nested inside `if (!useCMPS)`).
-  // Auto-probe only runs when nothing was configured AND no other IMU was already found.
-  if (portConfig.tm171Port != SERIAL_PORT_AUTO)
-  {
-      HardwareSerial* forcedPort = portFromConfig(portConfig.tm171Port, &Serial5);
-      Serial.print("\r\nTM171 manually assigned to "); Serial.println(portName(portConfig.tm171Port));
+  // Auto-probe only runs when nothing was configured AND no other IMU was already found,
+  // and only considers ports not explicitly reserved for something else.
+  HardwareSerial* pinnedTm171 = portPinnedTo(PORT_ROLE_TM171);
 
-      if (forcedPort == SerialGPS || forcedPort == SerialGPS2)
+  if (pinnedTm171)
+  {
+      Serial.print("\r\nTM171 manually assigned to "); Serial.println(portLabel(pinnedTm171));
+
+      if (pinnedTm171 == SerialGPS || pinnedTm171 == SerialGPS2)
       {
           Serial.println("WARNING: TM171 port matches a GPS port - check wiring, this will conflict.");
       }
 
-      if (TM171detectOnPort(forcedPort, 1500))
+      if (TM171detectOnPort(pinnedTm171, 1500))
       {
           Serial.println("TM171 confirmed on the assigned port.");
           useTM171 = true;
@@ -498,9 +538,8 @@ void setup()
         Serial.println("\r\nChecking for TM171 on Serial7 / Serial5");
 
         bool foundTM171 = false;
-        HardwareSerial* gnssMain = SerialGPS;
 
-        if (&Serial7 != gnssMain)
+        if (portIsFree(&Serial7) && &Serial7 != SerialGPS && &Serial7 != SerialGPS2)
         {
             if (TM171detectOnPort(&Serial7, 1500))
             {
@@ -509,17 +548,12 @@ void setup()
             }
         }
 
-        if (!foundTM171 && &Serial5 != gnssMain)
+        if (!foundTM171 && portIsFree(&Serial5) && &Serial5 != SerialGPS && &Serial5 != SerialGPS2)
         {
             if (TM171detectOnPort(&Serial5, 1500))
             {
                 Serial.println("Received data from TM171 on Serial5");
                 foundTM171 = true;
-
-                if (SerialGPS2 == &Serial5)
-                {
-                    SerialGPS2 = &Serial2;
-                }
             }
         }
 

@@ -84,16 +84,25 @@ Pin/ISR setup for whichever type is active happens in `pressureSensorInit()`, ca
 completed (reading stale/default config), same class of bug as the ADC-fatality check below.
 
 ### Serial port assignment (`PortConfig`, in the main `.ino`)
-GPS1/GPS2/TM171 can each be pinned to a specific port (`Serial2`/`Serial5`/`Serial7`) instead
-of relying on auto-detect, via the web page's Board Setup section. `SERIAL_PORT_AUTO`
-preserves the original auto-detect behavior. A manual TM171 port assignment is tried
-regardless of whether a CMPS/BNO was already found — the auto-detect path, by contrast, is
-nested inside `if (!useCMPS && !useBNO08x)`, so a false-positive CMPS ACK on the I2C bus (or a
-real CMPS/BNO also present) silently skips TM171 detection entirely in auto mode. This was a
-real field complaint (TM171 physically present, "not detected") before the manual override
-existed. Changing anything in `PortConfig` or the driver/pressure-sensor type from the web
-page triggers an automatic reboot (`SCB_AIRCR` reset) since these are only read once in
-`setup()` — don't try to apply them live.
+Per-*port*, not per-module: the Board Setup page has one dropdown per physical port
+(`Serial2`/`Serial5`/`Serial7`), each picking what's expected there — `Auto-detect` (default),
+`GPS 1`, `GPS 2`, `TM171 IMU`, or `Unused`. This maps more directly onto "what's wired where"
+than the first version of this feature did (a dropdown per module, each picking a port), and
+means GPS2 simply exists once some port claims that role — no separate GPS-count field needed.
+`portPinnedTo(role)` finds the (first) port explicitly assigned a role; `portIsFree(port)`
+tells auto-detect whether a port is fair game (role is still `Auto`) or reserved for something
+else it must leave alone. A manual TM171 assignment is tried regardless of whether a CMPS/BNO
+was already found — the auto-detect path, by contrast, is nested inside
+`if (!useCMPS && !useBNO08x)`, so a false-positive CMPS ACK on the I2C bus (or a real CMPS/BNO
+also present) silently skips TM171 detection entirely in auto mode. This was a real field
+complaint (TM171 physically wired, "not detected") before the manual override existed — though
+note that on at least one board, TM171 still wasn't detected under *any* firmware version
+tested, which points at wiring/power on that specific unit rather than a firmware bug; the
+manual port pin doesn't help if nothing is actually coming out of the sensor's TX pin.
+TM171's factory-default wiring is `Serial7` (per `TM171.ino`'s own `SerialImu` default).
+Changing anything in `PortConfig` or the driver/pressure-sensor type from the web page
+triggers an automatic reboot (`SCB_AIRCR` reset) since these are only read once in `setup()`
+— don't try to apply them live.
 
 ## EEPROM address map
 
@@ -139,8 +148,26 @@ and add a row to this table in the same commit.
 
 ## Debugging on the bench
 
-The web config page (`http://<board IP>/`, default `192.168.5.126`) shows live WAS angle,
-speed, filtered GPS heading, and wasless zero status, and lets you save without a full AOG
-setup. `curl` works fine for smoke-testing `POST /save` — see git history around the Phase 2
-commit for example payloads. Auto-zero debug logging goes to `Serial` at 115200 baud, prefixed
+The web config server (`zWebConfig.ino`, default IP `192.168.5.126`) is two pages, on purpose:
+`GET /` is Status (live WAS angle, speed, filtered GPS heading, wasless zero status, IMU
+detected) and auto-refreshes every 4s via a plain `<meta http-equiv="refresh">` — safe to
+reload constantly since it has no inputs to lose. `GET /setup` is every actual setting (Board
+Setup, auto-zero tuning, Keya calibration, EMA filters) as one form, and *never* reloads
+itself — there used to be a single page with a JS "pause the reload while the user is editing"
+guard, but it only watched `<input>` elements, not `<select>`, so the Board Setup dropdowns
+never paused it and the page could reload out from under someone mid-selection. Don't
+recombine these into one auto-refreshing page without solving that properly. `POST /save`
+handles both; it redirects back to `/setup`.
+
+`curl` works fine for smoke-testing `POST /save` — see git history around the Phase 2 commit
+for example payloads. Auto-zero debug logging goes to `Serial` at 115200 baud, prefixed
 `[AZ-PRECISE]`/`[AZ-FAST]`/`[AZ]`, and the `z` serial command opens a live tuning menu.
+
+**A remote script cannot reliably capture the very start of a boot log.** The Teensy's USB
+serial re-enumerates across any reset or reflash, and `Serial.print` over USB silently drops
+bytes if nothing has the port open yet — a script that opens the port only after triggering a
+reset/upload will consistently miss everything from early `setup()` (this was tried multiple
+times expecting it to just be a timing/race issue; it wasn't). If you need to see setup-time
+detection output (CMPS/BNO/TM171 probing, etc.), either keep a serial monitor continuously
+open through the reset, or — preferred — surface the thing you need to check as a value on the
+Status page instead of trying to catch it in a boot log.
