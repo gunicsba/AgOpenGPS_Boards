@@ -34,6 +34,10 @@ Onion PitchV;
 Onion TemperatureV;
 uint8_t qos;
 
+// TM171's yaw in plain degrees, kept alongside YawV so the wasless auto-zero engine
+// (Autosteer.ino) can read it without depending on the Onion union type across files.
+float tm171YawDeg = 0.0f;
+
 bool TM171DataSeen = false;
 
 //#define TM171DEBUG
@@ -120,7 +124,8 @@ void TM171process() {
           YawV.fBytes[1] = ImuData[20];
           YawV.fBytes[2] = ImuData[21];
           YawV.fBytes[3] = ImuData[22];
-      
+          tm171YawDeg = YawV.fValue;
+
 #ifdef TM171DEBUG
           Serial.print("yaw=");
           Serial.print(YawV.fValue);

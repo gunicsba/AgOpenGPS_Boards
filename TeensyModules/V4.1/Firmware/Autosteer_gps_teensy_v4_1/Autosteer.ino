@@ -58,6 +58,19 @@ extern int32_t keyaEncoderRaw;
 // Filtered GPS heading - defined in zHandlers.ino (compiled after this file)
 extern float emaGpsHdg;
 
+// TM171's yaw in plain degrees - defined in TM171.ino (compiled after this file)
+extern float tm171YawDeg;
+
+// Current heading in plain degrees from whichever gyro is active, for the auto-zero engine's
+// yaw-rate check below. BNO's own `yaw` global is stored as degrees x10 (see zHandlers.ino),
+// so it's converted here rather than compared directly against a plain deg/s threshold.
+static float currentYawDeg()
+{
+  if (useTM171)  return tm171YawDeg;
+  if (useBNO08x) return yaw / 10.0f;
+  return 0.0f;
+}
+
 // Auto-zero tuning parameters - struct defined here, instance lives in zAutoZeroMenu.ino
 // (also holds the serial menu ('z' key) used to tune these before the web UI existed)
 struct AutoZeroParams {
@@ -606,20 +619,21 @@ void autosteerLoop()
 
       bool guidanceActive = (watchdogTimer < WATCHDOG_THRESHOLD);
 
-      // --- BNO yaw rate [deg/s] ---
+      // --- Gyro yaw rate [deg/s], from whichever of BNO/TM171 is active ---
+      float yawNow = currentYawDeg();
       float yawRate = 0.0f;
       if (!azYawInit) {
-        azLastYaw  = yaw;
+        azLastYaw  = yawNow;
         azLastTime = nowMs;
         azYawInit  = true;
       } else {
         float dt = (nowMs - azLastTime) / 1000.0f;
         if (dt < 0.001f) dt = 0.001f;
-        float dYaw = yaw - azLastYaw;
+        float dYaw = yawNow - azLastYaw;
         if (dYaw >  180.0f) dYaw -= 360.0f;
         if (dYaw < -180.0f) dYaw += 360.0f;
         yawRate    = fabsf(dYaw) / dt;
-        azLastYaw  = yaw;
+        azLastYaw  = yawNow;
         azLastTime = nowMs;
       }
 
@@ -674,7 +688,7 @@ void autosteerLoop()
         Serial.print(nowMs - stableStart); Serial.print("/");
         Serial.print(azTimeMs); Serial.print("ms");
         Serial.print(" spd=");  Serial.print(gpsSpeed, 1);
-        Serial.print(" bno=");  Serial.print(straightOk ? "OK" : "NOK");
+        Serial.print(" gyro="); Serial.print(straightOk ? "OK" : "NOK");
         Serial.print(" yawR="); Serial.print(yawRate, 2);
         Serial.print("/");      Serial.print(yawRateMax, 2);
         Serial.print(" gps=");  Serial.print(gpsCapOk ? "OK" : "NOK");

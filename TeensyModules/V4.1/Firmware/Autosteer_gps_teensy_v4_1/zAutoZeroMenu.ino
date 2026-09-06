@@ -59,7 +59,7 @@ void azMenuPrint()
   Serial.print("5. High-speed duration  : "); Serial.print(azParams.timeFastMs      ); Serial.println(" ms");
   Serial.print("6. Low-speed threshold  : "); Serial.print(azParams.speedSlow,   1); Serial.println(" km/h");
   Serial.print("7. High-speed threshold : "); Serial.print(azParams.speedFast,   1); Serial.println(" km/h");
-  Serial.print("8. BNO source           : "); Serial.println(azParams.useBno ? "ACTIVE" : "INACTIVE");
+  Serial.print("8. Gyro source (BNO/TM171): "); Serial.println(azParams.useBno ? "ACTIVE" : "INACTIVE");
   Serial.print("9. GPS source           : "); Serial.println(azParams.useGps ? "ACTIVE" : "INACTIVE");
   Serial.print("10. Beta correction     : "); Serial.print(azParams.beta,        3); Serial.println("  (0.01=slow .. 0.2=fast)");
   Serial.println("11. Reset to defaults");
@@ -106,7 +106,7 @@ bool azMenuLoop()
     azMenuChoice = input.toInt();
 
     if (azMenuChoice == 11) {
-      azParams = { 1.0f, 0.8f, 1.0f, 500, 200, 3.0f, 12.0f, 1, 1, 0.05f, 0xA202 };
+      azParams = { 1.0f, 0.8f, 1.0f, 500, 200, 3.0f, 12.0f, 1, 1, 0.3f, 0xA202 };
       EEPROM.put(EEPROM_ADDR_AZ_PARAMS, azParams);
       Serial.println("[AZ-MENU] Defaults restored and saved.");
       azMenuPrint();

@@ -300,11 +300,12 @@ static void sendPage(EthernetClient& c)
   c.println("</div>");
 
   rowToggle(c,
-    "BNO08x source - gyroscopic yaw rate",
+    "Gyro source (BNO08x or TM171) - yaw rate",
     "useBno", azParams.useBno,
-    "The gyro measures rotation rate around heading [deg/s], which should be near zero when driving straight. "
+    "Uses whichever gyro is active (BNO08x or TM171) to measure rotation rate around heading [deg/s], "
+    "which should be near zero when driving straight. "
     "<b>Threshold: max yaw rate (below).</b> "
-    "Disable only if the BNO is absent or faulty.");
+    "Disable only if neither IMU is present or working.");
 
   rowToggle(c,
     "GPS VTG source - heading variation",
@@ -343,12 +344,12 @@ static void sendPage(EthernetClient& c)
     "maneuvering, or turning around. Recommended: <b>1.0 km/h</b>.");
 
   rowNum(c,
-    "Max BNO yaw rate",
+    "Max gyro yaw rate",
     "yawRateMax", azParams.yawRateMax, 2, "deg/s",
-    "Above this, the BNO is considered to be turning. "
+    "Above this, the gyro (BNO08x or TM171) is considered to be turning. "
     "<b>Lower</b> = stricter, zero only on very straight sections. "
     "<b>Higher</b> = more permissive, risks correcting through a gentle curve. "
-    "Inactive if the BNO source is disabled. Recommended: <b>0.5 - 1.0</b> deg/s.");
+    "Inactive if the gyro source is disabled. Recommended: <b>0.5 - 1.0</b> deg/s.");
 
   rowNum(c,
     "Max GPS heading delta",
