@@ -30,6 +30,51 @@
 #define STEER_DRIVER_HYDRAULIC 0   // Cytron / IBT2 / Danfoss-valve PWM
 #define STEER_DRIVER_KEYA 1        // Keya CAN motor (see KeyaCANBUS.ino)
 
+//   ***********  Wasless (Keya-encoder-as-WAS) mode  **************888
+// Active only when SteerDriverType == STEER_DRIVER_KEYA and the AOG "Danfoss" checkbox
+// (steerConfig.IsDanfoss) is set - reusing that bit is safe because a real Danfoss valve
+// and a Keya motor are never fitted to the same board. When active, steerAngleActual comes
+// from Keya's own CAN encoder instead of the ADS1115 WAS, continuously re-zeroed by the
+// auto-zero engine below (ported from AIO_Keya_WasKeyaFiltre) while driving straight.
+//
+// EEPROM layout note: these addresses are placed *after* hydConfig (100-107, see
+// MachineHydraulicLift.ino) with a deliberate gap, rather than reusing the 90/84/80
+// addresses from the source project - those actually overlap hydConfig's range once both
+// the hydraulic-lift feature and this wasless feature exist in the same firmware image,
+// which would have the two silently corrupt each other's EEPROM on every save.
+#define EEPROM_ADDR_KEYA_TICKS    114   // float - Keya encoder ticks-per-degree calibration
+#define KEYA_TICKS_PER_DEG_DEFAULT 24.0f  // 4 motor turns / 60 deg lock-to-lock, per AIO source
+
+float   keyaTicksPerDeg = KEYA_TICKS_PER_DEG_DEFAULT;
+int32_t keyaZeroTicks = 0;
+bool    wasZeroDone = false;
+uint32_t stableStart = 0;
+float   azCorrAccum = 0.0f; // sub-tick accumulation for the smooth in-guidance correction mode
+
+// Keya's own CAN encoder position - defined in KeyaCANBUS.ino (compiled after this file,
+// forward-declared here so autosteerLoop() can read it)
+extern int32_t keyaEncoderRaw;
+
+// Filtered GPS heading - defined in zHandlers.ino (compiled after this file)
+extern float emaGpsHdg;
+
+// Auto-zero tuning parameters - struct defined here, instance lives in zAutoZeroMenu.ino
+// (also holds the serial menu ('z' key) used to tune these before the web UI existed)
+struct AutoZeroParams {
+  float    speedMin;
+  float    yawRateMax;
+  float    gpsHdgMax;
+  uint32_t timeSlowMs;
+  uint32_t timeFastMs;
+  float    speedSlow;
+  float    speedFast;
+  uint8_t  useBno;      // 1 = use BNO yaw rate as a stability condition
+  uint8_t  useGps;      // 1 = use GPS heading-rate as a stability condition
+  float    beta;        // in-guidance correction speed (0.01=slow .. 0.2=fast)
+  uint16_t ident;
+};
+extern AutoZeroParams azParams;
+
 //   ***********  Motor drive connections  **************888
 //Connect ground only for cytron, Connect Ground and +5v for IBT2
 
@@ -242,15 +287,16 @@ void autosteerSetup()
   Wire1.end();
   Wire1.begin();
     
-  // Check ADC 
-  if(adc.testConnection())
+  // Check ADC - fatality decided below, once steerConfig is loaded, since a Keya wasless
+  // board (steering angle from the CAN encoder, not the ADS1115) doesn't need it.
+  bool adcOk = adc.testConnection();
+  if (adcOk)
   {
     Serial.println("ADC Connecton OK");
   }
   else
   {
     Serial.println("ADC Connecton FAILED!");
-    Autosteer_running = false;
   }
 
   //50Khz I2C
@@ -263,21 +309,40 @@ void autosteerSetup()
     EEPROM.put(0, EEP_Ident);
     EEPROM.put(10, steerSettings);
     EEPROM.put(40, steerConfig);
-    EEPROM.put(60, networkAddress);    
+    EEPROM.put(60, networkAddress);
     hydraulicConfigEprom(true);
   }
   else
   {
     EEPROM.get(10, steerSettings);     // read the Settings
     EEPROM.get(40, steerConfig);
-    EEPROM.get(60, networkAddress); 
+    EEPROM.get(60, networkAddress);
     hydraulicConfigEprom(false);
+  }
+
+  if (!adcOk)
+  {
+    if (steerConfig.SteerDriverType == STEER_DRIVER_KEYA && steerConfig.IsDanfoss)
+      Serial.println("ADC not used in Keya wasless mode (SteerDriverType=Keya, IsDanfoss=1) - continuing.");
+    else
+      Autosteer_running = false;
   }
 
   steerSettingsInit();
   steerConfigInit();
 
-  if (Autosteer_running) 
+  // Restore the Keya encoder ticks-per-degree mechanical calibration
+  {
+    float savedTicks = 0.0f;
+    EEPROM.get(EEPROM_ADDR_KEYA_TICKS, savedTicks);
+    if (!isnan(savedTicks) && !isinf(savedTicks) && savedTicks > 1.0f && savedTicks < 500.0f)
+      keyaTicksPerDeg = savedTicks;
+    else
+      keyaTicksPerDeg = KEYA_TICKS_PER_DEG_DEFAULT;
+  }
+  wasZeroDone = false; // the zero must be re-established every boot
+
+  if (Autosteer_running)
   {
     Serial.println("Autosteer running, waiting for AgOpenGPS");
     // Autosteer Led goes Red if ADS1115 is found
@@ -295,6 +360,9 @@ void autosteerSetup()
   adc.setSampleRate(ADS1115_REG_CONFIG_DR_128SPS); //128 samples per second
   adc.setGain(ADS1115_REG_CONFIG_PGA_6_144V);
 
+  azMenuSetup();   // load auto-zero tuning params from EEPROM (zAutoZeroMenu.ino)
+  emaParamsLoad(); // load IMU EMA filter alphas from EEPROM (zWebConfig.ino)
+
 }// End of Setup
 
 void autosteerLoop()
@@ -302,6 +370,11 @@ void autosteerLoop()
 #ifdef ARDUINO_TEENSY41
   ReceiveUdp();
 #endif
+
+  // Auto-zero tuning serial menu ('z' key in the serial monitor) - blocks the rest of the
+  // loop only while actively in the menu. See zAutoZeroMenu.ino.
+  if (azMenuLoop()) return;
+
   //Serial.println("AutoSteer loop");
 
   // Loop triggers every 100 msec and sends back gyro heading, and roll, steer angle etc
@@ -447,43 +520,230 @@ void autosteerLoop()
       #endif
     */
 
-    //get steering position
-    if (steerConfig.SingleInputWAS)   //Single Input ADS
+    // =================================================================
+    // STEERING ANGLE
+    //   SteerDriverType == Keya && IsDanfoss  -> Keya CAN encoder, wasless
+    //   otherwise                             -> physical WAS via ADS1115
+    // =================================================================
+    bool wasless = (steerConfig.SteerDriverType == STEER_DRIVER_KEYA) && steerConfig.IsDanfoss;
+
+    if (wasless)
     {
-      adc.setMux(ADS1115_REG_CONFIG_MUX_SINGLE_0);
-      steeringPosition = adc.getConversion();
-      adc.triggerConversion();//ADS1115 Single Mode
+      int32_t deltaTicks = keyaEncoderRaw - keyaZeroTicks;
+      float rawAngle = (float)deltaTicks / keyaTicksPerDeg;
 
-      steeringPosition = (steeringPosition >> 1); //bit shift by 2  0 to 13610 is 0 to 5v
-      helloSteerPosition = steeringPosition - 6800;
-    }
-    else    //ADS1115 Differential Mode
-    {
-      adc.setMux(ADS1115_REG_CONFIG_MUX_DIFF_0_1);
-      steeringPosition = adc.getConversion();
-      adc.triggerConversion();
+      if (steerConfig.InvertWAS) rawAngle = -rawAngle;
 
-      steeringPosition = (steeringPosition >> 1); //bit shift by 2  0 to 13610 is 0 to 5v
-      helloSteerPosition = steeringPosition - 6800;
-    }
+      steerAngleActual   = rawAngle;
+      helloSteerPosition = (int16_t)(rawAngle * 100.0f);
+      steeringPosition   = (int16_t)deltaTicks;
 
-    //DETERMINE ACTUAL STEERING POSITION
-
-    //convert position to steer angle. 32 counts per degree of steer pot position in my case
-    //  ***** make sure that negative steer angle makes a left turn and positive value is a right turn *****
-    if (steerConfig.InvertWAS)
-    {
-      steeringPosition = (steeringPosition - 6805  - steerSettings.wasOffset);   // 1/2 of full scale
-      steerAngleActual = (float)(steeringPosition) / -steerSettings.steerSensorCounts;
+      // Block guidance until the encoder zero has been established at least once
+      if (!wasZeroDone) watchdogTimer = WATCHDOG_FORCE_VALUE;
     }
     else
     {
-      steeringPosition = (steeringPosition - 6805  + steerSettings.wasOffset);   // 1/2 of full scale
-      steerAngleActual = (float)(steeringPosition) / steerSettings.steerSensorCounts;
+      //get steering position
+      if (steerConfig.SingleInputWAS)   //Single Input ADS
+      {
+        adc.setMux(ADS1115_REG_CONFIG_MUX_SINGLE_0);
+        steeringPosition = adc.getConversion();
+        adc.triggerConversion();//ADS1115 Single Mode
+
+        steeringPosition = (steeringPosition >> 1); //bit shift by 2  0 to 13610 is 0 to 5v
+        helloSteerPosition = steeringPosition - 6800;
+      }
+      else    //ADS1115 Differential Mode
+      {
+        adc.setMux(ADS1115_REG_CONFIG_MUX_DIFF_0_1);
+        steeringPosition = adc.getConversion();
+        adc.triggerConversion();
+
+        steeringPosition = (steeringPosition >> 1); //bit shift by 2  0 to 13610 is 0 to 5v
+        helloSteerPosition = steeringPosition - 6800;
+      }
+
+      //DETERMINE ACTUAL STEERING POSITION
+
+      //convert position to steer angle. 32 counts per degree of steer pot position in my case
+      //  ***** make sure that negative steer angle makes a left turn and positive value is a right turn *****
+      if (steerConfig.InvertWAS)
+      {
+        steeringPosition = (steeringPosition - 6805  - steerSettings.wasOffset);   // 1/2 of full scale
+        steerAngleActual = (float)(steeringPosition) / -steerSettings.steerSensorCounts;
+      }
+      else
+      {
+        steeringPosition = (steeringPosition - 6805  + steerSettings.wasOffset);   // 1/2 of full scale
+        steerAngleActual = (float)(steeringPosition) / steerSettings.steerSensorCounts;
+      }
     }
 
     //Ackerman fix
     if (steerAngleActual < 0) steerAngleActual = (steerAngleActual * steerSettings.AckermanFix);
+
+    // =================================================================
+    // WASLESS AUTO-ZERO - continuously re-zeroes the Keya encoder while the tractor is
+    // judged to be driving straight, fusing BNO yaw-rate and GPS heading-rate stability.
+    // Ported from AIO_Keya_WasKeyaFiltre. Only meaningful (and only runs) in wasless mode.
+    // =================================================================
+    if (wasless)
+    {
+      static const float AZ_NEAR_ZERO_DEG    = 2.0f;
+      static const float AZ_NEAR_ZERO_FACTOR = 0.3f;
+
+      static float    azLastYaw    = 0.0f;
+      static uint32_t azLastTime   = 0;
+      static int64_t  azAccum      = 0;
+      static uint32_t azCount      = 0;
+      static uint32_t dbgLastPrint = 0;
+      static uint32_t azCooldown   = 0;
+      static bool     azYawInit    = false;
+      static float    azLastGpsHdg = 0.0f;
+      static bool     azGpsInit    = false;
+
+      uint32_t nowMs = millis();
+
+      bool guidanceActive = (watchdogTimer < WATCHDOG_THRESHOLD);
+
+      // --- BNO yaw rate [deg/s] ---
+      float yawRate = 0.0f;
+      if (!azYawInit) {
+        azLastYaw  = yaw;
+        azLastTime = nowMs;
+        azYawInit  = true;
+      } else {
+        float dt = (nowMs - azLastTime) / 1000.0f;
+        if (dt < 0.001f) dt = 0.001f;
+        float dYaw = yaw - azLastYaw;
+        if (dYaw >  180.0f) dYaw -= 360.0f;
+        if (dYaw < -180.0f) dYaw += 360.0f;
+        yawRate    = fabsf(dYaw) / dt;
+        azLastYaw  = yaw;
+        azLastTime = nowMs;
+      }
+
+      // --- Filtered GPS heading rate (emaGpsHdg from zHandlers.ino, x10 deg -> deg) ---
+      float gpsHdgDeg  = emaGpsHdg / 10.0f;
+      float gpsHdgRate = 0.0f;
+      if (!azGpsInit) {
+        azLastGpsHdg = gpsHdgDeg;
+        azGpsInit    = true;
+      } else {
+        float dHdg = gpsHdgDeg - azLastGpsHdg;
+        if (dHdg >  180.0f) dHdg -= 360.0f;
+        if (dHdg < -180.0f) dHdg += 360.0f;
+        gpsHdgRate   = fabsf(dHdg);
+        azLastGpsHdg = gpsHdgDeg;
+      }
+
+      // --- Adaptive thresholds near zero angle (guidance-active only) ---
+      float adaptFactor = 1.0f;
+      if (guidanceActive) {
+        float absAngle = fabsf(steerAngleActual);
+        if (absAngle < AZ_NEAR_ZERO_DEG) {
+          float ratio = absAngle / AZ_NEAR_ZERO_DEG;
+          adaptFactor = AZ_NEAR_ZERO_FACTOR + ratio * (1.0f - AZ_NEAR_ZERO_FACTOR);
+        }
+      }
+
+      float yawRateMax = azParams.yawRateMax * adaptFactor;
+      float gpsHdgMax  = azParams.gpsHdgMax  * adaptFactor;
+      bool  gpsOk      = (gpsHdgRate < gpsHdgMax);
+
+      // --- Required stability duration (interpolated by speed) ---
+      float azTimeMsF;
+      if      (gpsSpeed <= azParams.speedSlow) azTimeMsF = (float)azParams.timeSlowMs;
+      else if (gpsSpeed >= azParams.speedFast) azTimeMsF = (float)azParams.timeFastMs;
+      else {
+        float t = (gpsSpeed - azParams.speedSlow) / (azParams.speedFast - azParams.speedSlow);
+        azTimeMsF = (float)azParams.timeSlowMs + t * ((float)azParams.timeFastMs - (float)azParams.timeSlowMs);
+      }
+      azTimeMsF = constrain(azTimeMsF, 200.0f, 5000.0f);
+      uint32_t azTimeMs = (uint32_t)azTimeMsF;
+
+      bool speedOk    = (gpsSpeed > azParams.speedMin);
+      bool straightOk = (!azParams.useBno) || (yawRate < yawRateMax);
+      bool gpsCapOk   = (!azParams.useGps) || gpsOk;
+      bool cooldownOk = (nowMs - azCooldown > 2000);
+
+      if (stableStart > 0 && (nowMs - dbgLastPrint > 5000)) {
+        dbgLastPrint = nowMs;
+        Serial.print(guidanceActive ? "[AZ-PRECISE] " : "[AZ-FAST] ");
+        Serial.print("stable ");
+        Serial.print(nowMs - stableStart); Serial.print("/");
+        Serial.print(azTimeMs); Serial.print("ms");
+        Serial.print(" spd=");  Serial.print(gpsSpeed, 1);
+        Serial.print(" bno=");  Serial.print(straightOk ? "OK" : "NOK");
+        Serial.print(" yawR="); Serial.print(yawRate, 2);
+        Serial.print("/");      Serial.print(yawRateMax, 2);
+        Serial.print(" gps=");  Serial.print(gpsCapOk ? "OK" : "NOK");
+        Serial.print(" gpsR="); Serial.print(gpsHdgRate, 2);
+        Serial.print("/");      Serial.print(gpsHdgMax, 2);
+        Serial.print(" adapt="); Serial.print(adaptFactor, 2);
+        Serial.print(" angle="); Serial.print(steerAngleActual, 2);
+        Serial.print(" enc=");   Serial.println(keyaEncoderRaw);
+      }
+
+      if (speedOk && straightOk && gpsCapOk && cooldownOk)
+      {
+        if (stableStart == 0) {
+          stableStart = nowMs;
+          azAccum     = 0;
+          azCount     = 0;
+        }
+
+        azAccum += (int64_t)keyaEncoderRaw;
+        azCount++;
+
+        if ((nowMs - stableStart) > azTimeMs && azCount > 0)
+        {
+          int32_t meanTicks = (int32_t)(azAccum / (int64_t)azCount);
+
+          if (!wasZeroDone)
+          {
+            keyaZeroTicks = meanTicks;
+            wasZeroDone   = true;
+            azCorrAccum   = 0.0f;
+            Serial.print("[AZ] First zero established (");
+            Serial.print(azCount); Serial.print(" samples) zeroTicks=");
+            Serial.println(keyaZeroTicks);
+          }
+          else if (!guidanceActive)
+          {
+            // FAST mode: jump straight to the new mean
+            int32_t oldZero = keyaZeroTicks;
+            keyaZeroTicks   = meanTicks;
+            azCorrAccum     = 0.0f;
+            Serial.print("[AZ-FAST] zero: "); Serial.print(oldZero);
+            Serial.print(" -> ");             Serial.println(keyaZeroTicks);
+          }
+          else
+          {
+            // PRECISE mode: smooth sub-tick correction while actively steering
+            float corrSign = steerConfig.InvertWAS ? -1.0f : 1.0f;
+            azCorrAccum += corrSign * azParams.beta * steerAngleActual * keyaTicksPerDeg;
+            int32_t corrInt = (int32_t)azCorrAccum;
+            if (corrInt != 0) {
+              keyaZeroTicks += corrInt;
+              azCorrAccum   -= (float)corrInt;
+            }
+          }
+
+          azAccum     = 0;
+          azCount     = 0;
+          stableStart = 0;
+          azCooldown  = nowMs;
+        }
+      }
+      else
+      {
+        stableStart = 0;
+        azAccum     = 0;
+        azCount     = 0;
+      }
+    }
+    // =================================================================
 
     if (watchdogTimer < WATCHDOG_THRESHOLD)
     {
@@ -721,6 +981,16 @@ void ReceiveUdp()
 
                 steerSettings.steerSensorCounts = autoSteerUdpData[9]; //sent as setting displayed in AOG
 
+                // In Keya wasless mode, steerSensorCounts instead scales keyaTicksPerDeg -
+                // pure proportional, centered on 100 = KEYA_TICKS_PER_DEG_DEFAULT (24 ticks/deg).
+                // The zero point itself is handled separately by the auto-zero engine above.
+                if (steerConfig.SteerDriverType == STEER_DRIVER_KEYA && steerConfig.IsDanfoss)
+                {
+                    keyaTicksPerDeg = KEYA_TICKS_PER_DEG_DEFAULT * ((float)steerSettings.steerSensorCounts / 100.0f);
+                    if (keyaTicksPerDeg < 1.0f) keyaTicksPerDeg = 1.0f; // guard against divide-by-zero
+                    EEPROM.put(EEPROM_ADDR_KEYA_TICKS, keyaTicksPerDeg);
+                }
+
                 steerSettings.wasOffset = (autoSteerUdpData[10]);  //read was zero offset Lo
 
                 steerSettings.wasOffset |= (autoSteerUdpData[11] << 8);  //read was zero offset Hi
@@ -732,6 +1002,18 @@ void ReceiveUdp()
 
                 //store in EEPROM
                 EEPROM.put(10, steerSettings);
+
+                // In Keya wasless mode, AOG sending wasOffset = 0 (its own "re-zero WAS" action)
+                // forces an immediate re-zero of the encoder instead of touching an ADC offset.
+                if (steerConfig.SteerDriverType == STEER_DRIVER_KEYA && steerConfig.IsDanfoss && steerSettings.wasOffset == 0)
+                {
+                    keyaZeroTicks = keyaEncoderRaw;
+                    wasZeroDone   = true;
+                    stableStart   = 0;
+                    azCorrAccum   = 0.0f;
+                    Serial.print("[AZ] Zero forced from AOG - zeroTicks=");
+                    Serial.println(keyaZeroTicks);
+                }
 
                 // Re-Init steer settings
                 steerSettingsInit();

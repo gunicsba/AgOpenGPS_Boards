@@ -40,6 +40,8 @@ void EthernetStart()
 
   Ethernet_running = true;
 
+  webConfigSetup();
+
   Eth_ipDestination[0] = Eth_myip[0];
   Eth_ipDestination[1] = Eth_myip[1];
   Eth_ipDestination[2] = Eth_myip[2];

@@ -137,11 +137,9 @@ float KeyaCurrentSensorReading = 0;
 #include <Wire.h>
 #include "BNO08x_AOG.h"
 
-//roll moyenne flottante
-#include "RunningAverage.h"
-RunningAverage myRA(7);
-int samples = 0;
-float avg = 0;
+// Roll/pitch/yaw smoothing is handled by the configurable EMA filters in zHandlers.ino
+// (tunable from the web config page - see zWebConfig.ino), which replace the fixed
+// 7-sample running average this used to do.
 
 //Used to set CPU speed
 extern "C" uint32_t set_arm_clock(uint32_t frequency); // required prototype
@@ -680,6 +678,8 @@ void loop()
             parser << c;
         }
     }
+
+    webConfigLoop(); // non-blocking, serves the board's config page - see zWebConfig.ino
 
     udpNtrip();
 

@@ -10,6 +10,32 @@
 
 uint64_t KeyaPGN = 0x06000001;
 
+// ---------------------------------------------------------------------------
+// Cumulative encoder position from the heartbeat (bytes 0-1). 65535 ticks = 1 motor
+// revolution. The hardware counter is a uint16 that wraps in either direction; deltas are
+// accumulated into a signed int32 absolute position for the wasless mode (see Autosteer.ino).
+// ---------------------------------------------------------------------------
+#define KEYA_ENCODER_INVERT 1   // 0 = normal direction | 1 = reversed
+
+int32_t  keyaEncoderRaw  = 0;
+uint16_t keyaEncPrev     = 0;
+bool     keyaEncInitDone = false;
+
+void keyaUpdateEncoder(uint16_t rawTick)
+{
+	if (!keyaEncInitDone) {
+		keyaEncPrev     = rawTick;
+		keyaEncInitDone = true;
+		return;
+	}
+	int16_t delta = (int16_t)(rawTick - keyaEncPrev);
+#if KEYA_ENCODER_INVERT
+	delta = -delta;
+#endif
+	keyaEncoderRaw += delta;
+	keyaEncPrev     = rawTick;
+}
+
 // Set true only for bench debugging - Serial.println() with String concatenation runs every
 // 25ms steering cycle while engaged, which allocates on the heap and isn't something we want
 // running continuously on a steering controller in the field.
@@ -97,11 +123,14 @@ void KeyaBus_Receive() {
 	CAN_message_t KeyaBusReceiveData;
 	if (Keya_Bus.read(KeyaBusReceiveData)) {
 		// heartbeat 0x07000001
-		// 0-1 - Cumulative value of angle (360 deg / circle) - not yet consumed (see wasless work, phase 2)
+		// 0-1 - Cumulative value of angle (360 deg / circle), high byte first
 		// 2-3 - Motor speed, signed int
 		// 4-5 - Motor current, byte 4 == 0xFF flags negative current
 		// 6-7 - Control_Close (error code) - not yet consumed
 		if (KeyaBusReceiveData.id == 0x07000001) {
+			uint16_t encTick = ((uint16_t)KeyaBusReceiveData.buf[0] << 8) | (uint16_t)KeyaBusReceiveData.buf[1];
+			keyaUpdateEncoder(encTick);
+
 			if (KeyaBusReceiveData.buf[4] == 0xFF) {
 				KeyaCurrentSensorReading = (0.95 * KeyaCurrentSensorReading) + (0.05 * (256 - KeyaBusReceiveData.buf[5]) * 20);
 			}

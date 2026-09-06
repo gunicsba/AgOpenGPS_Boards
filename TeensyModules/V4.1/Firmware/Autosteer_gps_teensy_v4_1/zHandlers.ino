@@ -25,6 +25,30 @@ char ageDGPS[10];
 char vtgHeading[12] = { };
 char speedKnots[10] = { };
 
+// Filtered GPS heading (x10 deg, same scale as yaw) - feeds the wasless auto-zero engine's
+// GPS-heading-rate stability check (see Autosteer.ino). Fixed alpha, not user-tunable.
+float emaGpsHdg = 0.0f;
+static bool emaGpsInit = false;
+static const float EMA_GPS_ALPHA = 0.1f;
+
+// ============================================================
+// EMA BNO anti-jitter filters - yaw, roll, pitch
+// Alpha = 0.0 => filter disabled (raw value)
+// Alpha = 0.05~0.30 => active filtering (lower = smoother)
+// Tunable from the web config page (zWebConfig.ino) or serial commands EY/ER/EP/ES.
+// ============================================================
+float emaYawAlpha = 0.00f;
+float emaRollAlpha = 0.00f;
+float emaPitchAlpha = 0.00f;
+float emaStopKmh = 1.5f;     // speed threshold (km/h) below which EMA resets to raw; 0 = always filter
+
+static float emaYaw = 0.0f;
+static float emaRoll_f = 0.0f;
+static float emaPitch_f = 0.0f;
+static bool emaYawInit = false;
+static bool emaRollInit = false;
+static bool emaPitchInit = false;
+
 // IMU
 char imuHeading[6];
 char imuRoll[6];
@@ -225,23 +249,188 @@ void readBNO()
             if(steerConfig.IsUseY_Axis)
             {
               roll = asin(t2) * RAD_TO_DEG_X_10;
-              myRA.addValue(roll);
-              avg = myRA.getAverage();
               pitch = atan2(t0, t1) * RAD_TO_DEG_X_10;
             }
             else
             {
               pitch = asin(t2) * RAD_TO_DEG_X_10;
               roll = atan2(t0, t1) * RAD_TO_DEG_X_10;
-              myRA.addValue(roll);
-              avg = myRA.getAverage();
             }
-            roll = avg;
+
             if(invertRoll)
             {
               roll *= -1;
             }
+
+            // -------------------------------------------------------
+            // EMA YAW / ROLL / PITCH anti-jitter filters, tunable from the web config page
+            // or serial EY/ER/EP/ES commands. Reset to the raw value while stationary (below
+            // emaStopKmh) so the filter doesn't lag after starting from a long stop.
+            // -------------------------------------------------------
+            float speedMs = atof(speedKnots) * 0.5144f; // knots -> m/s
+            bool isStationary = (emaStopKmh > 0.0f) && (speedMs < (emaStopKmh / 3.6f));
+
+            if (emaYawAlpha <= 0.0f || isStationary)
+            {
+                emaYaw = (float)yaw;
+                emaYawInit = false;
+            }
+            else
+            {
+                if (!emaYawInit)
+                {
+                    emaYaw = (float)yaw;
+                    emaYawInit = true;
+                }
+                else
+                {
+                    float diff = (float)yaw - emaYaw;
+                    if (diff > 1800.0f) diff -= 3600.0f;   // wrap-around
+                    if (diff < -1800.0f) diff += 3600.0f;
+                    emaYaw += emaYawAlpha * diff;
+                    if (emaYaw < 0.0f) emaYaw += 3600.0f;
+                    if (emaYaw >= 3600.0f) emaYaw -= 3600.0f;
+                }
+                yaw = (int16_t)emaYaw;
+            }
+
+            if (emaRollAlpha <= 0.0f || isStationary)
+            {
+                emaRoll_f = roll;
+                emaRollInit = false;
+            }
+            else
+            {
+                if (!emaRollInit)
+                {
+                    emaRoll_f = roll;
+                    emaRollInit = true;
+                }
+                else
+                {
+                    float diff = roll - emaRoll_f;
+                    emaRoll_f += emaRollAlpha * diff;
+                }
+                roll = emaRoll_f;
+            }
+
+            if (emaPitchAlpha <= 0.0f || isStationary)
+            {
+                emaPitch_f = pitch;
+                emaPitchInit = false;
+            }
+            else
+            {
+                if (!emaPitchInit)
+                {
+                    emaPitch_f = pitch;
+                    emaPitchInit = true;
+                }
+                else
+                {
+                    float diff = pitch - emaPitch_f;
+                    emaPitch_f += emaPitchAlpha * diff;
+                }
+                pitch = emaPitch_f;
+            }
         }
+}
+
+// ============================================================
+// Serial commands for the EMA BNO filters
+//
+// EY<value>   => yaw EMA alpha    (e.g. EY0.10)
+// ER<value>   => roll EMA alpha   (e.g. ER0.05)
+// EP<value>   => pitch EMA alpha  (e.g. EP0.10)
+// ES<value>   => EMA reset speed threshold in km/h (e.g. ES1.0)
+// EY0 / ER0 / EP0  => disable the corresponding filter
+// ES0          => filter continuously, never reset for being stationary
+// EY?          => print all current values
+//
+// Called from zAutoZeroMenu.ino's azMenuLoop() outside the auto-zero menu itself.
+// ============================================================
+bool handleEmaSerialCommand(const String &cmd)
+{
+    if (cmd.length() < 2)
+        return false;
+
+    if (cmd.startsWith("EY?") || cmd.startsWith("ER?") || cmd.startsWith("EP?") || cmd.startsWith("ES?"))
+    {
+        Serial.println(F("--- EMA BNO filters ---"));
+        Serial.print(F("  EMA Yaw   alpha : "));
+        Serial.println(emaYawAlpha, 3);
+        Serial.print(F("  EMA Roll  alpha : "));
+        Serial.println(emaRollAlpha, 3);
+        Serial.print(F("  EMA Pitch alpha : "));
+        Serial.println(emaPitchAlpha, 3);
+        Serial.print(F("  Stop threshold  : "));
+        Serial.print(emaStopKmh, 1);
+        Serial.println(F(" km/h"));
+        Serial.println(F("  0.0 = disabled | 0.05~0.30 = active | ES0 = always filter"));
+        return true;
+    }
+
+    if (cmd.startsWith("EY"))
+    {
+        float val = cmd.substring(2).toFloat();
+        if (val < 0.0f || val > 1.0f)
+        {
+            Serial.println(F("EY: out of range [0.0-1.0]"));
+            return true;
+        }
+        emaYawAlpha = val;
+        emaYawInit = false;
+        Serial.print(F("EMA Yaw alpha -> "));
+        Serial.println(emaYawAlpha, 3);
+        return true;
+    }
+
+    if (cmd.startsWith("ER"))
+    {
+        float val = cmd.substring(2).toFloat();
+        if (val < 0.0f || val > 1.0f)
+        {
+            Serial.println(F("ER: out of range [0.0-1.0]"));
+            return true;
+        }
+        emaRollAlpha = val;
+        emaRollInit = false;
+        Serial.print(F("EMA Roll alpha -> "));
+        Serial.println(emaRollAlpha, 3);
+        return true;
+    }
+
+    if (cmd.startsWith("EP"))
+    {
+        float val = cmd.substring(2).toFloat();
+        if (val < 0.0f || val > 1.0f)
+        {
+            Serial.println(F("EP: out of range [0.0-1.0]"));
+            return true;
+        }
+        emaPitchAlpha = val;
+        emaPitchInit = false;
+        Serial.print(F("EMA Pitch alpha -> "));
+        Serial.println(emaPitchAlpha, 3);
+        return true;
+    }
+
+    if (cmd.startsWith("ES"))
+    {
+        float val = cmd.substring(2).toFloat();
+        if (val < 0.0f || val > 20.0f)
+        {
+            Serial.println(F("ES: out of range [0.0-20.0 km/h]"));
+            return true;
+        }
+        emaStopKmh = val;
+        Serial.print(F("EMA stop threshold -> "));
+        Serial.print(emaStopKmh, 1);
+        Serial.println(F(" km/h"));
+        return true;
+    }
+
+    return false; // not one of ours
 }
 
 void imuHandler()
@@ -651,5 +840,20 @@ void VTG_Handler()
   // vtg Speed knots
   parser.getArg(4, speedKnots);
 
-
+  // Update filtered GPS heading (x10 deg, same scale as yaw) - used by the wasless auto-zero engine
+  float rawHdg = atof(vtgHeading) * 10.0f;
+  if (!emaGpsInit)
+  {
+    emaGpsHdg = rawHdg;
+    emaGpsInit = true;
+  }
+  else
+  {
+    float diff = rawHdg - emaGpsHdg;
+    if (diff > 1800.0f) diff -= 3600.0f;   // wrap-around
+    if (diff < -1800.0f) diff += 3600.0f;
+    emaGpsHdg += EMA_GPS_ALPHA * diff;
+    if (emaGpsHdg < 0.0f) emaGpsHdg += 3600.0f;
+    if (emaGpsHdg >= 3600.0f) emaGpsHdg -= 3600.0f;
+  }
 }
