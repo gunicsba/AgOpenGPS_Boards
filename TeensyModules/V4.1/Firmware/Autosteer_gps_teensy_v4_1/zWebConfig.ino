@@ -4,10 +4,16 @@
 // webConfigSetup() is called from EthernetStart() after Ethernet.begin() (see zEthernet.ino)
 // webConfigLoop()  is called from the main loop() (NOT from autosteerLoop) - see the main .ino
 //
-// Ported from AIO_Keya_WasKeyaFiltre. Covers the settings that don't have a home in
-// AgOpenGPS's own Steer Config screen: wasless auto-zero tuning, Keya encoder calibration,
-// and BNO anti-jitter filters. SteerDriverType/PressureSensorType selection is planned for
-// a later pass (EEPROM consolidation), not yet exposed here.
+// Three pages, deliberately separate:
+//   GET  /         Status  - live values, auto-refreshes every 4s (nothing on it to lose)
+//   GET  /board    Board   - driver/kickout sensor type, serial port assignment, IMU EMA
+//                            filters. POST /saveboard. May reboot the board (see below).
+//   GET  /wasless  Wasless - the auto-zero engine's own tuning + Keya encoder calibration.
+//                            POST /savewasless. Shows a banner for whether wasless mode is
+//                            actually active right now, since these settings do nothing
+//                            otherwise. Never reboots - everything here is read live.
+// Ported from AIO_Keya_WasKeyaFiltre, covering the settings that don't have a home in
+// AgOpenGPS's own Steer Config screen.
 // =============================================================
 
 #ifdef ARDUINO_TEENSY41
@@ -63,10 +69,10 @@ static void sendOK(EthernetClient& c, const char* contentType)
   c.println();
 }
 
-static void sendRedirect(EthernetClient& c)
+static void sendRedirect(EthernetClient& c, const char* location)
 {
   c.println("HTTP/1.1 303 See Other");
-  c.println("Location: /setup");
+  c.print("Location: "); c.println(location);
   c.println("Connection: close");
   c.println();
 }
@@ -89,14 +95,14 @@ static uint32_t extractUint(const String& body, const char* key, uint32_t defVal
 }
 
 // -----------------------------------------------------------------
-// Handle a POST /save request. Returns true if a board-setup field (driver type, kickout
-// sensor type, or serial port assignment) changed, meaning the board needs to reboot for
-// the new value to actually take effect (they're only read once, in setup()).
-static bool handlePost(const String& body)
+// Handle a POST /saveboard request (driver type, kickout sensor type, serial port
+// assignment, BNO/TM171 anti-jitter EMA filters). Returns true if driver type, kickout
+// sensor type, or port assignment changed - those are only read once in setup(), so the
+// board needs to reboot for a change to actually take effect.
+static bool handleBoardPost(const String& body)
 {
   bool needsReboot = false;
 
-  // ---- Board setup: steering driver / kickout sensor type ----
   uint8_t newDriverType = (uint8_t)extractFloat(body, "steerDriverType", steerConfig.SteerDriverType);
   if (newDriverType <= 1 && newDriverType != steerConfig.SteerDriverType)
   {
@@ -120,7 +126,7 @@ static bool handlePost(const String& body)
     EEPROM.put(EEPROM_ADDR_PRESSURE_MAX_HZ, pressureSensorMaxHz);
   }
 
-  // ---- Board setup: serial port assignment (per-port role, see main .ino) ----
+  // ---- Serial port assignment (per-port role, see main .ino) ----
   uint8_t newSerial2Role = (uint8_t)extractFloat(body, "serial2Role", portConfig.serial2Role);
   uint8_t newSerial5Role = (uint8_t)extractFloat(body, "serial5Role", portConfig.serial5Role);
   uint8_t newSerial7Role = (uint8_t)extractFloat(body, "serial7Role", portConfig.serial7Role);
@@ -138,29 +144,7 @@ static bool handlePost(const String& body)
     needsReboot = true;
   }
 
-  // Checkboxes are only present in the POST body when checked
-  azParams.useBno = body.indexOf("useBno=1") >= 0 ? 1 : 0;
-  azParams.useGps = body.indexOf("useGps=1") >= 0 ? 1 : 0;
-
-  float b = extractFloat(body, "beta", azParams.beta);
-  if (b >= 0.001f && b <= 1.0f) azParams.beta = b;
-
-  azParams.speedMin   = extractFloat(body, "speedMin",   azParams.speedMin);
-  azParams.yawRateMax = extractFloat(body, "yawRateMax", azParams.yawRateMax);
-  azParams.gpsHdgMax  = extractFloat(body, "gpsHdgMax",  azParams.gpsHdgMax);
-  azParams.timeSlowMs = extractUint (body, "timeSlowMs", azParams.timeSlowMs);
-  azParams.timeFastMs = extractUint (body, "timeFastMs", azParams.timeFastMs);
-  azParams.speedSlow  = extractFloat(body, "speedSlow",  azParams.speedSlow);
-  azParams.speedFast  = extractFloat(body, "speedFast",  azParams.speedFast);
-  EEPROM.put(EEPROM_ADDR_AZ_PARAMS, azParams);
-
-  float ticks = extractFloat(body, "keyaTicks", keyaTicksPerDeg);
-  if (ticks > 1.0f && ticks < 500.0f) {
-    keyaTicksPerDeg = ticks;
-    EEPROM.put(EEPROM_ADDR_KEYA_TICKS, keyaTicksPerDeg);
-  }
-
-  // BNO EMA filters
+  // ---- BNO/TM171 anti-jitter EMA filters (live, no reboot needed) ----
   {
     float v;
     v = extractFloat(body, "emaYaw", emaYawAlpha);
@@ -185,9 +169,8 @@ static bool handlePost(const String& body)
     }
   }
 
-  Serial.print("[WEB] Saved. useBno="); Serial.print(azParams.useBno);
-  Serial.print(" useGps=");             Serial.print(azParams.useGps);
-  Serial.print(" beta=");               Serial.println(azParams.beta, 3);
+  Serial.print("[WEB] Board setup saved. driverType="); Serial.print(steerConfig.SteerDriverType);
+  Serial.print(" pressureSensorType="); Serial.println(steerConfig.PressureSensorType);
 
   if (needsReboot)
   {
@@ -195,6 +178,38 @@ static bool handlePost(const String& body)
   }
 
   return needsReboot;
+}
+
+// -----------------------------------------------------------------
+// Handle a POST /savewasless request (auto-zero tuning + Keya encoder calibration). Every
+// field here is read live every cycle - no reboot needed for any of it to take effect.
+static void handleWaslessPost(const String& body)
+{
+  // Checkboxes are only present in the POST body when checked
+  azParams.useBno = body.indexOf("useBno=1") >= 0 ? 1 : 0;
+  azParams.useGps = body.indexOf("useGps=1") >= 0 ? 1 : 0;
+
+  float b = extractFloat(body, "beta", azParams.beta);
+  if (b >= 0.001f && b <= 1.0f) azParams.beta = b;
+
+  azParams.speedMin   = extractFloat(body, "speedMin",   azParams.speedMin);
+  azParams.yawRateMax = extractFloat(body, "yawRateMax", azParams.yawRateMax);
+  azParams.gpsHdgMax  = extractFloat(body, "gpsHdgMax",  azParams.gpsHdgMax);
+  azParams.timeSlowMs = extractUint (body, "timeSlowMs", azParams.timeSlowMs);
+  azParams.timeFastMs = extractUint (body, "timeFastMs", azParams.timeFastMs);
+  azParams.speedSlow  = extractFloat(body, "speedSlow",  azParams.speedSlow);
+  azParams.speedFast  = extractFloat(body, "speedFast",  azParams.speedFast);
+  EEPROM.put(EEPROM_ADDR_AZ_PARAMS, azParams);
+
+  float ticks = extractFloat(body, "keyaTicks", keyaTicksPerDeg);
+  if (ticks > 1.0f && ticks < 500.0f) {
+    keyaTicksPerDeg = ticks;
+    EEPROM.put(EEPROM_ADDR_KEYA_TICKS, keyaTicksPerDeg);
+  }
+
+  Serial.print("[WEB] Wasless setup saved. useBno="); Serial.print(azParams.useBno);
+  Serial.print(" useGps=");                            Serial.print(azParams.useGps);
+  Serial.print(" beta=");                              Serial.println(azParams.beta, 3);
 }
 
 // -----------------------------------------------------------------
@@ -309,17 +324,28 @@ static void sendHead(EthernetClient& c, const char* title, bool autoRefresh)
   c.println(".nav{display:flex;gap:8px;margin-bottom:14px}");
   c.println(".nav a{flex:1;text-align:center;padding:9px;border-radius:6px;text-decoration:none;font-size:.88em;color:#bbb;background:#16213e}");
   c.println(".nav a.active{background:#e94560;color:#fff;font-weight:bold}");
+  c.println(".waslessBanner{padding:12px 14px;border-radius:8px;margin-bottom:14px;font-size:.9em;font-weight:bold;line-height:1.5}");
+  c.println(".wOn{background:#0d2b1e;border:1px solid #1a5c38;color:#4ecb8d}");
+  c.println(".wOff{background:#2b1f0d;border:1px solid #5c4a1a;color:#f0a030}");
   c.println("</style></head><body>");
 
   c.println("<h1>&#9881; AgOpenGPS Board Config</h1>");
 }
 
-static void sendNav(EthernetClient& c, bool statusActive)
+// 0 = Status, 1 = Board, 2 = Wasless
+static void sendNav(EthernetClient& c, uint8_t activeTab)
 {
   c.print("<div class='nav'>");
-  c.print("<a href='/'");      if (statusActive)  c.print(" class='active'"); c.print(">&#128202; Status</a>");
-  c.print("<a href='/setup'"); if (!statusActive) c.print(" class='active'"); c.print(">&#9881; Setup</a>");
+  c.print("<a href='/'");        if (activeTab == 0) c.print(" class='active'"); c.print(">&#128202; Status</a>");
+  c.print("<a href='/board'");   if (activeTab == 1) c.print(" class='active'"); c.print(">&#128736; Board</a>");
+  c.print("<a href='/wasless'"); if (activeTab == 2) c.print(" class='active'"); c.print(">&#127919; Wasless</a>");
   c.println("</div>");
+}
+
+// True when the board is actually running in wasless (Keya-encoder-as-WAS) mode right now.
+static bool waslessActive()
+{
+  return (steerConfig.SteerDriverType == STEER_DRIVER_KEYA) && steerConfig.IsDanfoss;
 }
 
 // -----------------------------------------------------------------
@@ -329,7 +355,7 @@ static void sendStatusPage(EthernetClient& c)
 {
   sendOK(c, "text/html");
   sendHead(c, "AgOpenGPS Board Status", true);
-  sendNav(c, true);
+  sendNav(c, 0);
 
   // ---- LIVE STATUS ----
   c.print("<div class='status'>");
@@ -344,7 +370,10 @@ static void sendStatusPage(EthernetClient& c)
   else if (useBNO08x) c.print("BNO08x");
   else if (useCMPS)   c.print("CMPS14");
   else                c.print("<span class='nok'>none</span>");
-  c.println("</b></div>");
+  c.print("</b> &nbsp; &#128295; Wasless: ");
+  if (waslessActive()) c.print("<span class='ok'>&#10003; ACTIVE</span>");
+  else                 c.print("<span class='nok'>inactive</span>");
+  c.println("</div>");
 
   // ---- AUTO-ZERO TRACKING ----
   {
@@ -389,16 +418,17 @@ static void sendStatusPage(EthernetClient& c)
 }
 
 // -----------------------------------------------------------------
-// Setup page - the only place with a form. Never auto-refreshes, so there's no reload to
-// race against while picking a dropdown or dragging a slider - just save when you're ready.
+// Board page - driver/sensor type, serial port assignment, IMU anti-jitter filters. Never
+// auto-refreshes, so there's no reload to race against while picking a dropdown or dragging
+// a slider - just save when you're ready.
 // -----------------------------------------------------------------
-static void sendSetupPage(EthernetClient& c)
+static void sendBoardPage(EthernetClient& c)
 {
   sendOK(c, "text/html");
   sendHead(c, "AgOpenGPS Board Setup", false);
-  sendNav(c, false);
+  sendNav(c, 1);
 
-  c.println("<form method='POST' action='/save'>");
+  c.println("<form method='POST' action='/saveboard'>");
 
   // ================================================================
   // SECTION 0: BOARD SETUP
@@ -458,9 +488,97 @@ static void sendSetupPage(EthernetClient& c)
 
   c.println("<hr class='sep'>");
 
-  c.print("<div class='desc' style='color:#888;margin:-6px 0 12px'>");
-  c.print("Everything below only applies when the driver type above is Keya CAN and the AOG \"Danfoss\" checkbox is on (wasless mode).");
+  // ================================================================
+  // SECTION 1: BNO/TM171 ANTI-JITTER EMA FILTERS
+  // ================================================================
+  c.println("<h2>&#127919; IMU anti-jitter EMA filters</h2>");
+
+  c.print("<div class='desc' style='color:#888;margin-bottom:9px'>");
+  c.print("Exponential smoothing applied to yaw, roll and pitch before they go into the PANDA sentence. "
+          "<b>0.0</b> = disabled (raw value). "
+          "<b>0.05</b> = very smooth. "
+          "<b>0.10</b> = balanced. "
+          "<b>0.30</b> = nearly raw.");
   c.println("</div>");
+
+  c.print("<div class='emarow'>");
+  c.print("<label>Yaw (heading)</label>");
+  c.print("<input type='range' name='emaYaw' min='0' max='0.5' step='0.01' value='");
+  c.print(emaYawAlpha, 2);
+  c.print("' oninput=\"document.getElementById('vy').textContent=parseFloat(this.value).toFixed(2);\">");
+  c.print("<span class='emaval' id='vy'>"); c.print(emaYawAlpha, 2); c.print("</span>");
+  if (emaYawAlpha == 0.0f) c.print("<span class='emabadge off'>OFF</span>");
+  else                     c.print("<span class='emabadge on'>ON</span>");
+  c.println("</div>");
+
+  c.print("<div class='emarow'>");
+  c.print("<label>Roll</label>");
+  c.print("<input type='range' name='emaRoll' min='0' max='0.5' step='0.01' value='");
+  c.print(emaRollAlpha, 2);
+  c.print("' oninput=\"document.getElementById('vr').textContent=parseFloat(this.value).toFixed(2);\">");
+  c.print("<span class='emaval' id='vr'>"); c.print(emaRollAlpha, 2); c.print("</span>");
+  if (emaRollAlpha == 0.0f) c.print("<span class='emabadge off'>OFF</span>");
+  else                      c.print("<span class='emabadge on'>ON</span>");
+  c.println("</div>");
+
+  c.print("<div class='emarow'>");
+  c.print("<label>Pitch</label>");
+  c.print("<input type='range' name='emaPitch' min='0' max='0.5' step='0.01' value='");
+  c.print(emaPitchAlpha, 2);
+  c.print("' oninput=\"document.getElementById('vp').textContent=parseFloat(this.value).toFixed(2);\">");
+  c.print("<span class='emaval' id='vp'>"); c.print(emaPitchAlpha, 2); c.print("</span>");
+  if (emaPitchAlpha == 0.0f) c.print("<span class='emabadge off'>OFF</span>");
+  else                       c.print("<span class='emabadge on'>ON</span>");
+  c.println("</div>");
+
+  c.println("<hr class='sep'>");
+
+  c.print("<div class='emarow'>");
+  c.print("<label>Stop-reset threshold</label>");
+  c.print("<input type='range' name='emaStop' min='0' max='10' step='0.5' value='");
+  c.print(emaStopKmh, 1);
+  c.print("' oninput=\"document.getElementById('vs').textContent=parseFloat(this.value).toFixed(1);\">");
+  c.print("<span class='emaval' id='vs'>"); c.print(emaStopKmh, 1); c.print("</span>");
+  c.print("<span style='font-size:.73em;color:#556;margin-left:4px'>km/h</span>");
+  c.println("</div>");
+  c.print("<div class='desc'>");
+  c.print("Below this speed the EMA resets to the raw value. "
+          "<b>0.0</b> = filter continuously, even while stopped.");
+  c.println("</div>");
+
+  // ================================================================
+  // SAVE BUTTON
+  // ================================================================
+  c.println("<button type='submit'>&#128190; Save to EEPROM</button>");
+  c.println("<p class='foot'>This page never reloads on its own - check the Status tab for live values.</p>");
+  c.println("</form>");
+  c.println("</body></html>");
+}
+
+// -----------------------------------------------------------------
+// Wasless page - the auto-zero engine's own tuning (heading sources, stability conditions
+// and durations, Keya encoder calibration). Only actually does anything when the board is
+// in wasless mode - the banner below makes that unmissable rather than a easy-to-miss note.
+// -----------------------------------------------------------------
+static void sendWaslessPage(EthernetClient& c)
+{
+  sendOK(c, "text/html");
+  sendHead(c, "AgOpenGPS Wasless Setup", false);
+  sendNav(c, 2);
+
+  if (waslessActive())
+  {
+    c.print("<div class='waslessBanner wOn'>&#9989; WASLESS MODE ACTIVE — ");
+    c.print("these settings are in effect right now.</div>");
+  }
+  else
+  {
+    c.print("<div class='waslessBanner wOff'>&#9888; Wasless mode is OFF — these settings currently have no effect. ");
+    c.print("Turn it on from the <a href='/board' style='color:#f0a030'>Board</a> page (Steering driver = Keya CAN) ");
+    c.print("and AgOpenGPS's own \"Danfoss\" checkbox in Steer Config.</div>");
+  }
+
+  c.println("<form method='POST' action='/savewasless'>");
 
   // ================================================================
   // SECTION 1: HEADING SOURCES
@@ -577,67 +695,6 @@ static void sendSetupPage(EthernetClient& c)
     "If AOG's reported angle is too large, increase this; too small, decrease it. "
     "Formula: (motor_turns x 65535) / total_steer_angle_deg.");
 
-  // ================================================================
-  // SECTION 5: BNO ANTI-JITTER EMA FILTERS
-  // ================================================================
-  c.println("<h2>&#127919; BNO08x anti-jitter EMA filters</h2>");
-
-  c.print("<div class='desc' style='color:#888;margin-bottom:9px'>");
-  c.print("Exponential smoothing applied to yaw, roll and pitch before they go into the PANDA sentence. "
-          "<b>0.0</b> = disabled (raw value). "
-          "<b>0.05</b> = very smooth. "
-          "<b>0.10</b> = balanced. "
-          "<b>0.30</b> = nearly raw.");
-  c.println("</div>");
-
-  c.print("<div class='emarow'>");
-  c.print("<label>Yaw (heading)</label>");
-  c.print("<input type='range' name='emaYaw' min='0' max='0.5' step='0.01' value='");
-  c.print(emaYawAlpha, 2);
-  c.print("' oninput=\"document.getElementById('vy').textContent=parseFloat(this.value).toFixed(2);\">");
-  c.print("<span class='emaval' id='vy'>"); c.print(emaYawAlpha, 2); c.print("</span>");
-  if (emaYawAlpha == 0.0f) c.print("<span class='emabadge off'>OFF</span>");
-  else                     c.print("<span class='emabadge on'>ON</span>");
-  c.println("</div>");
-
-  c.print("<div class='emarow'>");
-  c.print("<label>Roll</label>");
-  c.print("<input type='range' name='emaRoll' min='0' max='0.5' step='0.01' value='");
-  c.print(emaRollAlpha, 2);
-  c.print("' oninput=\"document.getElementById('vr').textContent=parseFloat(this.value).toFixed(2);\">");
-  c.print("<span class='emaval' id='vr'>"); c.print(emaRollAlpha, 2); c.print("</span>");
-  if (emaRollAlpha == 0.0f) c.print("<span class='emabadge off'>OFF</span>");
-  else                      c.print("<span class='emabadge on'>ON</span>");
-  c.println("</div>");
-
-  c.print("<div class='emarow'>");
-  c.print("<label>Pitch</label>");
-  c.print("<input type='range' name='emaPitch' min='0' max='0.5' step='0.01' value='");
-  c.print(emaPitchAlpha, 2);
-  c.print("' oninput=\"document.getElementById('vp').textContent=parseFloat(this.value).toFixed(2);\">");
-  c.print("<span class='emaval' id='vp'>"); c.print(emaPitchAlpha, 2); c.print("</span>");
-  if (emaPitchAlpha == 0.0f) c.print("<span class='emabadge off'>OFF</span>");
-  else                       c.print("<span class='emabadge on'>ON</span>");
-  c.println("</div>");
-
-  c.println("<hr class='sep'>");
-
-  c.print("<div class='emarow'>");
-  c.print("<label>Stop-reset threshold</label>");
-  c.print("<input type='range' name='emaStop' min='0' max='10' step='0.5' value='");
-  c.print(emaStopKmh, 1);
-  c.print("' oninput=\"document.getElementById('vs').textContent=parseFloat(this.value).toFixed(1);\">");
-  c.print("<span class='emaval' id='vs'>"); c.print(emaStopKmh, 1); c.print("</span>");
-  c.print("<span style='font-size:.73em;color:#556;margin-left:4px'>km/h</span>");
-  c.println("</div>");
-  c.print("<div class='desc'>");
-  c.print("Below this speed the EMA resets to the raw value. "
-          "<b>0.0</b> = filter continuously, even while stopped.");
-  c.println("</div>");
-
-  // ================================================================
-  // SAVE BUTTON
-  // ================================================================
   c.println("<button type='submit'>&#128190; Save to EEPROM</button>");
   c.println("<p class='foot'>This page never reloads on its own - check the Status tab for live values.</p>");
   c.println("</form>");
@@ -694,11 +751,16 @@ void webConfigLoop()
 
   bool needsReboot = false;
 
-  if (isPost && body.length() > 0) {
-    needsReboot = handlePost(body);
-    sendRedirect(client);
-  } else if (requestLine.indexOf("/setup") >= 0) {
-    sendSetupPage(client);
+  if (isPost && requestLine.indexOf("/saveboard") >= 0 && body.length() > 0) {
+    needsReboot = handleBoardPost(body);
+    sendRedirect(client, "/board");
+  } else if (isPost && requestLine.indexOf("/savewasless") >= 0 && body.length() > 0) {
+    handleWaslessPost(body);
+    sendRedirect(client, "/wasless");
+  } else if (requestLine.indexOf("/wasless") >= 0) {
+    sendWaslessPage(client);
+  } else if (requestLine.indexOf("/board") >= 0) {
+    sendBoardPage(client);
   } else {
     sendStatusPage(client);
   }

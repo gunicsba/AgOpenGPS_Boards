@@ -148,20 +148,31 @@ and add a row to this table in the same commit.
 
 ## Debugging on the bench
 
-The web config server (`zWebConfig.ino`, default IP `192.168.5.126`) is two pages, on purpose:
-`GET /` is Status (live WAS angle, speed, filtered GPS heading, wasless zero status, IMU
-detected) and auto-refreshes every 4s via a plain `<meta http-equiv="refresh">` — safe to
-reload constantly since it has no inputs to lose. `GET /setup` is every actual setting (Board
-Setup, auto-zero tuning, Keya calibration, EMA filters) as one form, and *never* reloads
-itself — there used to be a single page with a JS "pause the reload while the user is editing"
-guard, but it only watched `<input>` elements, not `<select>`, so the Board Setup dropdowns
-never paused it and the page could reload out from under someone mid-selection. Don't
-recombine these into one auto-refreshing page without solving that properly. `POST /save`
-handles both; it redirects back to `/setup`.
+The web config server (`zWebConfig.ino`, default IP `192.168.5.126`) is three pages, on
+purpose:
+- `GET /` — Status: live WAS angle, speed, filtered GPS heading, wasless zero status, IMU
+  detected, a live "Wasless: ACTIVE/inactive" indicator. Auto-refreshes every 4s via a plain
+  `<meta http-equiv="refresh">` — safe to reload constantly since it has no inputs to lose.
+- `GET /board` — driver type, kickout sensor type + Danfoss Hz calibration, per-port serial
+  role assignment, IMU anti-jitter EMA filters. `POST /saveboard` handles it, redirects back
+  to `/board`, and may reboot the board (see the architecture section above).
+- `GET /wasless` — the auto-zero engine's own tuning (heading sources, stability
+  conditions/durations, Keya encoder calibration). `POST /savewasless` handles it, redirects
+  back to `/wasless`, never reboots. Shows a prominent banner for whether wasless mode is
+  actually active right now (`waslessActive()`, same condition as the SteerDriverType/
+  IsDanfoss check elsewhere) — these settings silently do nothing when it isn't, so the
+  banner exists specifically so that's never a surprise.
 
-`curl` works fine for smoke-testing `POST /save` — see git history around the Phase 2 commit
-for example payloads. Auto-zero debug logging goes to `Serial` at 115200 baud, prefixed
-`[AZ-PRECISE]`/`[AZ-FAST]`/`[AZ]`, and the `z` serial command opens a live tuning menu.
+None of the three pages auto-refresh except Status. There used to be a single combined page
+with a JS "pause the reload while the user is editing" guard, but it only watched `<input>`
+elements, not `<select>`, so dropdowns never paused it and the page could reload out from
+under someone mid-selection — don't reintroduce an auto-refreshing settings page without
+solving that class of bug properly (or just don't auto-refresh a page with a form on it).
+
+`curl` works fine for smoke-testing `POST /saveboard` and `POST /savewasless` — see git
+history around the Phase 2/3 commits for example payloads. Auto-zero debug logging goes to
+`Serial` at 115200 baud, prefixed `[AZ-PRECISE]`/`[AZ-FAST]`/`[AZ]`, and the `z` serial
+command opens a live tuning menu.
 
 **A remote script cannot reliably capture the very start of a boot log.** The Teensy's USB
 serial re-enumerates across any reset or reflash, and `Serial.print` over USB silently drops
