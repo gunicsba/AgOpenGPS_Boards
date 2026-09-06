@@ -810,7 +810,8 @@ void loop()
     if (SerialGPS->available())
     {
         char c = SerialGPS->read();
-        
+        termTapPort(SerialGPS, (uint8_t)c); // remote terminal - see zWebTerminal.ino
+
         if (passThroughGPS)
         {
             SerialAOG.write(c);
@@ -828,7 +829,9 @@ void loop()
     // Check for RTK Radio
     if (SerialRTK.available())
     {
-        SerialGPS->write(SerialRTK.read());
+        uint8_t rtkByte = SerialRTK.read();
+        termTapSerial3(rtkByte); // remote terminal - see zWebTerminal.ino
+        SerialGPS->write(rtkByte);
     }
 
     // If both dual messages are ready, send to AgOpen
@@ -843,6 +846,7 @@ void loop()
     if (SerialGPS2->available())
     {
         uint8_t incoming_char = SerialGPS2->read();  //Read RELPOSNED from F9P
+        termTapPort(SerialGPS2, incoming_char); // remote terminal - see zWebTerminal.ino
 
         if (passThroughGPS2)
         {

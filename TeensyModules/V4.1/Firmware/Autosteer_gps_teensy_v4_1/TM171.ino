@@ -52,7 +52,8 @@ void TM171process() {
   while (SerialImu->available())
   {
     uint8_t temp = SerialImu->read();
-    switch (parseState) 
+    termTapPort(SerialImu, temp); // remote terminal - see zWebTerminal.ino
+    switch (parseState)
     {
       case WAIT_HEADER_1:
         if (temp == 0xAA)

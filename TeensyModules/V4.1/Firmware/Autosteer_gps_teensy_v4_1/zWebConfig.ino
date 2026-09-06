@@ -332,14 +332,15 @@ static void sendHead(EthernetClient& c, const char* title, bool autoRefresh)
   c.println("<h1>&#9881; AgOpenGPS Board Config</h1>");
 }
 
-// 0 = Status, 1 = Board, 2 = Wasless, 3 = OTA
+// 0 = Status, 1 = Board, 2 = Wasless, 3 = OTA, 4 = Terminal
 static void sendNav(EthernetClient& c, uint8_t activeTab)
 {
   c.print("<div class='nav'>");
-  c.print("<a href='/'");        if (activeTab == 0) c.print(" class='active'"); c.print(">&#128202; Status</a>");
-  c.print("<a href='/board'");   if (activeTab == 1) c.print(" class='active'"); c.print(">&#128736; Board</a>");
-  c.print("<a href='/wasless'"); if (activeTab == 2) c.print(" class='active'"); c.print(">&#127919; Wasless</a>");
-  c.print("<a href='/ota'");     if (activeTab == 3) c.print(" class='active'"); c.print(">&#128228; OTA</a>");
+  c.print("<a href='/'");         if (activeTab == 0) c.print(" class='active'"); c.print(">&#128202; Status</a>");
+  c.print("<a href='/board'");    if (activeTab == 1) c.print(" class='active'"); c.print(">&#128736; Board</a>");
+  c.print("<a href='/wasless'");  if (activeTab == 2) c.print(" class='active'"); c.print(">&#127919; Wasless</a>");
+  c.print("<a href='/ota'");      if (activeTab == 3) c.print(" class='active'"); c.print(">&#128228; OTA</a>");
+  c.print("<a href='/terminal'"); if (activeTab == 4) c.print(" class='active'"); c.print(">&#128187; Term</a>");
   c.println("</div>");
 }
 
@@ -775,6 +776,17 @@ void webConfigLoop()
   } else if (isPost && requestLine.indexOf("/savewasless") >= 0 && body.length() > 0) {
     handleWaslessPost(body);
     sendRedirect(client, "/wasless");
+  } else if (isPost && requestLine.indexOf("/terminal/send") >= 0 && body.length() > 0) {
+    handleTerminalSend(body);
+    sendOK(client, "text/plain"); client.print("ok");
+  } else if (isPost && requestLine.indexOf("/terminal/baud") >= 0 && body.length() > 0) {
+    handleTerminalBaud(body);
+    sendOK(client, "text/plain"); client.print("ok");
+  } else if (requestLine.indexOf("/terminal/data") >= 0) {
+    String qs = termQueryString(requestLine);
+    sendTerminalData(client, (uint8_t)extractFloat(qs, "port", 0), (uint32_t)extractFloat(qs, "since", 0));
+  } else if (requestLine.indexOf("/terminal") >= 0) {
+    sendTerminalPage(client);
   } else if (requestLine.indexOf("/ota") >= 0) {
     sendOtaPage(client);
   } else if (requestLine.indexOf("/wasless") >= 0) {

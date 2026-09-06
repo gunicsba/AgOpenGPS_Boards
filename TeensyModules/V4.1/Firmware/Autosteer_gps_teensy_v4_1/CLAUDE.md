@@ -207,11 +207,16 @@ recovery path, not just an inconvenience.
   updates" section above for the full design (FlasherX-based, explicit stage/confirm/cancel
   over the web UI). There's no automatic rollback on a bad image — the safety net is the
   `FLASH_ID` check at stage time plus the explicit confirm step, not an undo after the fact.
+- **The web server has no authentication, on any page.** Anyone on the same network can
+  change the steering driver type, reassign serial ports, upload and flash new firmware, or
+  send arbitrary bytes to a GPS/TM171 port via the terminal — all with nothing but the
+  board's IP. Accepted as reasonable for a board that only ever sits on an isolated farm LAN;
+  not something to assume is fine in a different network context without revisiting this.
 
 ## Debugging on the bench
 
-The web config server (`zWebConfig.ino`, default IP `192.168.5.126`) is three pages, on
-purpose:
+The web config server (`zWebConfig.ino` + `zOTA.ino` + `zWebTerminal.ino`, default IP
+`192.168.5.126`) is five pages, on purpose:
 - `GET /` — Status: live WAS angle, speed, filtered GPS heading, wasless zero status, IMU
   detected, a live "Wasless: ACTIVE/inactive" indicator. Auto-refreshes every 4s via a plain
   `<meta http-equiv="refresh">` — safe to reload constantly since it has no inputs to lose.
@@ -224,12 +229,43 @@ purpose:
   actually active right now (`waslessActive()`, same condition as the SteerDriverType/
   IsDanfoss check elsewhere) — these settings silently do nothing when it isn't, so the
   banner exists specifically so that's never a surprise.
+- `GET /ota` — firmware update, see the OTA section above.
+- `GET /terminal` — remote serial terminal, see below.
 
-None of the three pages auto-refresh except Status. There used to be a single combined page
-with a JS "pause the reload while the user is editing" guard, but it only watched `<input>`
-elements, not `<select>`, so dropdowns never paused it and the page could reload out from
-under someone mid-selection — don't reintroduce an auto-refreshing settings page without
-solving that class of bug properly (or just don't auto-refresh a page with a form on it).
+None of these auto-refresh except Status (the Terminal page polls its own data endpoint via
+`fetch()`, which is a different thing — no full-page reload happens there either). There used
+to be a single combined settings page with a JS "pause the reload while the user is editing"
+guard, but it only watched `<input>` elements, not `<select>`, so dropdowns never paused it
+and the page could reload out from under someone mid-selection — don't reintroduce an
+auto-refreshing settings page without solving that class of bug properly (or just don't
+auto-refresh a page with a form on it).
+
+### Remote serial terminal (`zWebTerminal.ino`)
+
+View and send raw bytes on `Serial2`/`Serial3`(RTK)/`Serial5`/`Serial7` from the web UI,
+without physical USB access. This exists specifically because the TM171-not-detected
+investigation had no way to check "is anything even coming out of this wire" short of
+physically re-wiring a logic analyzer or a second USB-serial adapter.
+
+It does **not** own these ports — it taps the bytes at the points the firmware already reads
+them (GPS/GPS2 ingestion and the RTK passthrough in the main `.ino`, `TM171process()` in
+`TM171.ino`), one extra `termTapPort()`/`termTapSerial3()` call at each site, into a 2KB
+per-port ring buffer. The real parsing logic is untouched. `GET /terminal/data?port=N&since=N`
+returns only the bytes newer than `since` as hex, polled by the page every ~500ms and appended
+client-side — this is why the page itself never needs to reload. `POST /terminal/send` writes
+URL-decoded text to a port (also useful for driving the existing serial-menu commands —
+`zAutoZeroMenu.ino`'s `z` menu, `zHandlers.ino`'s `EY`/`ER`/`EP`/`ES` — remotely instead of
+only from a USB serial monitor). `POST /terminal/baud` re-`begin()`s a port at a different
+rate for diagnostics — this **will** disrupt normal use of that port (GPS reception, TM171
+parsing, whatever currently owns it) until it's changed back or the board reboots; the page
+says so, it's not hidden.
+
+Named `zWebTerminal.ino` specifically so it sorts after `zWebConfig.ino` in the concatenated
+sketch, since it reuses `sendOK`/`sendHead`/`sendNav`/`extractFloat` from there — avoids
+relying on cross-file auto-prototyping being order-independent (it is, for well-known types;
+this just removes the need to reason about it). `TermRingBuf` needed the same explicit-
+prototype-after-the-type fix as `OtaStageResult`/`ota_hex_info_t` — see those comments for
+the general pattern if you add another struct used as a function parameter anywhere.
 
 `curl` works fine for smoke-testing `POST /saveboard` and `POST /savewasless` — see git
 history around the Phase 2/3 commits for example payloads. Auto-zero debug logging goes to
