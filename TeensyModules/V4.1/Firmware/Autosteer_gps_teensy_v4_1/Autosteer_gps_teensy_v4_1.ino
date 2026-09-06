@@ -128,6 +128,11 @@ int relposnedByteCount = 0;
 elapsedMillis speedPulseUpdateTimer = 0;
 byte velocityPWM_Pin = 36;      // Velocity (MPH speed) PWM pin
 
+// Keya CAN motor bus - only initialised/polled when steerConfig.SteerDriverType == STEER_DRIVER_KEYA
+#include <FlexCAN_T4.h>
+FlexCAN_T4<CAN3, RX_SIZE_256, TX_SIZE_256> Keya_Bus;
+float KeyaCurrentSensorReading = 0;
+
 #include "zNMEAParser.h"
 #include <Wire.h>
 #include "BNO08x_AOG.h"
@@ -307,7 +312,10 @@ void setup()
 
   Serial.println("\r\nStarting AutoSteer...");
   autosteerSetup();
-  
+
+  Serial.println("\r\nStarting Keya CANBUS (no-op unless SteerDriverType is Keya)...");
+  CAN_Setup();
+
   Serial.println("\r\nStarting Ethernet...");
   EthernetStart();
 
@@ -758,6 +766,8 @@ void loop()
       imuHandler();
     }
     
+    KeyaBus_Receive(); // no-op unless SteerDriverType is Keya
+
     if (Autosteer_running) autosteerLoop();
     else ReceiveUdp();
     

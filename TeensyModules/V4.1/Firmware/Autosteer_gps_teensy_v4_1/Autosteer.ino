@@ -21,7 +21,14 @@
 /////////////////////////////////////////////
 
 // if not in eeprom, overwrite
-#define EEP_Ident 2400
+// Bumped from 2400 for the SteerDriverType field added to Setup - forces a clean re-init on
+// first boot of this firmware. Losing the old hydraulic-lift/steer settings on that one upgrade
+// is accepted; nothing here tries to preserve them byte-for-byte across the layout change.
+#define EEP_Ident 2500
+
+//   ***********  Steering driver type  **************888
+#define STEER_DRIVER_HYDRAULIC 0   // Cytron / IBT2 / Danfoss-valve PWM
+#define STEER_DRIVER_KEYA 1        // Keya CAN motor (see KeyaCANBUS.ino)
 
 //   ***********  Motor drive connections  **************888
 //Connect ground only for cytron, Connect Ground and +5v for IBT2
@@ -160,7 +167,8 @@ struct Setup {
   uint8_t PulseCountMax = 5;
   uint8_t IsDanfoss = 0;
   uint8_t IsUseY_Axis = 0;     //Set to 0 to use X Axis, 1 to use Y avis
-}; Setup steerConfig;               // 9 bytes
+  uint8_t SteerDriverType = STEER_DRIVER_HYDRAULIC;  //STEER_DRIVER_HYDRAULIC or STEER_DRIVER_KEYA
+}; Setup steerConfig;               // 14 bytes
 
 void steerConfigInit()
 {
@@ -405,10 +413,17 @@ void autosteerLoop()
     // Current sensor?
     if (steerConfig.CurrentSensor)
     {
-      sensorSample = (float)analogRead(CURRENT_SENSOR_PIN);
-      sensorSample = (abs(775 - sensorSample)) * 0.5;
-      sensorReading = sensorReading * 0.9 + sensorSample * 0.1;    
-      sensorReading = min(sensorReading, 255);
+      if (steerConfig.SteerDriverType == STEER_DRIVER_KEYA)
+      {
+        sensorReading = KeyaCurrentSensorReading; // fed by KeyaBus_Receive() heartbeat parsing
+      }
+      else
+      {
+        sensorSample = (float)analogRead(CURRENT_SENSOR_PIN);
+        sensorSample = (abs(775 - sensorSample)) * 0.5;
+        sensorReading = sensorReading * 0.9 + sensorSample * 0.1;
+        sensorReading = min(sensorReading, 255);
+      }
 
       if (sensorReading >= steerConfig.PulseCountMax)
       {
@@ -472,19 +487,22 @@ void autosteerLoop()
 
     if (watchdogTimer < WATCHDOG_THRESHOLD)
     {
-      //Enable H Bridge for IBT2, hyd aux, etc for cytron
-      if (steerConfig.CytronDriver)
+      //Enable H Bridge for IBT2, hyd aux, etc for cytron - not applicable to the Keya CAN motor
+      if (steerConfig.SteerDriverType == STEER_DRIVER_HYDRAULIC)
       {
-        if (steerConfig.IsRelayActiveHigh)
+        if (steerConfig.CytronDriver)
         {
-          digitalWrite(PWM2_RPWM, 0);
+          if (steerConfig.IsRelayActiveHigh)
+          {
+            digitalWrite(PWM2_RPWM, 0);
+          }
+          else
+          {
+            digitalWrite(PWM2_RPWM, 1);
+          }
         }
-        else
-        {
-          digitalWrite(PWM2_RPWM, 1);
-        }
+        else digitalWrite(DIR1_RL_ENABLE, 1);
       }
-      else digitalWrite(DIR1_RL_ENABLE, 1);
 
       steerAngleError = steerAngleActual - steerAngleSetPoint;   //calculate the steering error
       //if (abs(steerAngleError)< steerSettings.lowPWM) steerAngleError = 0;
@@ -499,21 +517,25 @@ void autosteerLoop()
     else
     {
       //we've lost the comm to AgOpenGPS, or just stop request
-      //Disable H Bridge for IBT2, hyd aux, etc for cytron
-      if (steerConfig.CytronDriver)
+      //Disable H Bridge for IBT2, hyd aux, etc for cytron - not applicable to the Keya CAN motor
+      if (steerConfig.SteerDriverType == STEER_DRIVER_HYDRAULIC)
       {
-        if (steerConfig.IsRelayActiveHigh)
+        if (steerConfig.CytronDriver)
         {
-          digitalWrite(PWM2_RPWM, 1);
+          if (steerConfig.IsRelayActiveHigh)
+          {
+            digitalWrite(PWM2_RPWM, 1);
+          }
+          else
+          {
+            digitalWrite(PWM2_RPWM, 0);
+          }
         }
-        else
-        {
-          digitalWrite(PWM2_RPWM, 0);
-        }
+        else digitalWrite(DIR1_RL_ENABLE, 0); //IBT2
       }
-      else digitalWrite(DIR1_RL_ENABLE, 0); //IBT2
 
       pwmDrive = 0; //turn off steering motor
+      if (steerConfig.SteerDriverType == STEER_DRIVER_KEYA) disableKeyaSteer(); //lost comms with AOG - definitely stop steering
       motorDrive(); //out to motors the pwm value
       pulseCount = 0;
       // Autosteer Led goes back to RED when autosteering is stopped

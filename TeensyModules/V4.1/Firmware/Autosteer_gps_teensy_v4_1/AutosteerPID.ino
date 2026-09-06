@@ -26,7 +26,7 @@ void calcSteeringPID(void)
 
     if (steerConfig.MotorDriveDirection) pwmDrive *= -1;
 
-    if (steerConfig.IsDanfoss)
+    if (steerConfig.IsDanfoss && steerConfig.SteerDriverType == STEER_DRIVER_HYDRAULIC)
     {
         // Danfoss: PWM 25% On = Left Position max  (below Valve=Center)
         // Danfoss: PWM 50% On = Center Position
@@ -53,6 +53,14 @@ void calcSteeringPID(void)
 
 void motorDrive(void)
 {
+  if (steerConfig.SteerDriverType == STEER_DRIVER_KEYA)
+  {
+    if (pwmDrive == 0) disableKeyaSteer();
+    else SteerKeya(pwmDrive);
+    pwmDisplay = pwmDrive;
+    return;
+  }
+
   // Used with Cytron MD30C Driver
   // Steering Motor
   // Dir + PWM Signal
