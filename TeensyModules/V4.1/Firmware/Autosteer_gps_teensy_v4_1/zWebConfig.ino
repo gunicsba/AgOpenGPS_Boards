@@ -89,10 +89,58 @@ static uint32_t extractUint(const String& body, const char* key, uint32_t defVal
 }
 
 // -----------------------------------------------------------------
-// Handle a POST /save request
-// -----------------------------------------------------------------
-static void handlePost(const String& body)
+// Handle a POST /save request. Returns true if a board-setup field (driver type, kickout
+// sensor type, or serial port assignment) changed, meaning the board needs to reboot for
+// the new value to actually take effect (they're only read once, in setup()).
+static bool handlePost(const String& body)
 {
+  bool needsReboot = false;
+
+  // ---- Board setup: steering driver / kickout sensor type ----
+  uint8_t newDriverType = (uint8_t)extractFloat(body, "steerDriverType", steerConfig.SteerDriverType);
+  if (newDriverType <= 1 && newDriverType != steerConfig.SteerDriverType)
+  {
+    steerConfig.SteerDriverType = newDriverType;
+    needsReboot = true;
+  }
+
+  uint8_t newPressureType = (uint8_t)extractFloat(body, "pressureSensorType", steerConfig.PressureSensorType);
+  if (newPressureType <= 2 && newPressureType != steerConfig.PressureSensorType)
+  {
+    steerConfig.PressureSensorType = newPressureType;
+    needsReboot = true;
+  }
+
+  EEPROM.put(40, steerConfig);
+
+  float newMaxHz = extractFloat(body, "pressureSensorMaxHz", pressureSensorMaxHz);
+  if (newMaxHz > 1.0f && newMaxHz < 5000.0f)
+  {
+    pressureSensorMaxHz = newMaxHz;
+    EEPROM.put(EEPROM_ADDR_PRESSURE_MAX_HZ, pressureSensorMaxHz);
+  }
+
+  // ---- Board setup: serial port assignment ----
+  uint8_t newGpsCount = (uint8_t)extractFloat(body, "gpsCount",  portConfig.gpsCount);
+  uint8_t newGps1     = (uint8_t)extractFloat(body, "gps1Port",  portConfig.gps1Port);
+  uint8_t newGps2     = (uint8_t)extractFloat(body, "gps2Port",  portConfig.gps2Port);
+  uint8_t newTm171    = (uint8_t)extractFloat(body, "tm171Port", portConfig.tm171Port);
+  newGpsCount = (newGpsCount == 2) ? 2 : 1;
+  if (newGps1  > SERIAL_PORT_7) newGps1  = SERIAL_PORT_AUTO;
+  if (newGps2  > SERIAL_PORT_7) newGps2  = SERIAL_PORT_AUTO;
+  if (newTm171 > SERIAL_PORT_7) newTm171 = SERIAL_PORT_AUTO;
+
+  if (newGpsCount != portConfig.gpsCount || newGps1 != portConfig.gps1Port ||
+      newGps2 != portConfig.gps2Port || newTm171 != portConfig.tm171Port)
+  {
+    portConfig.gpsCount  = newGpsCount;
+    portConfig.gps1Port  = newGps1;
+    portConfig.gps2Port  = newGps2;
+    portConfig.tm171Port = newTm171;
+    portConfigSave();
+    needsReboot = true;
+  }
+
   // Checkboxes are only present in the POST body when checked
   azParams.useBno = body.indexOf("useBno=1") >= 0 ? 1 : 0;
   azParams.useGps = body.indexOf("useGps=1") >= 0 ? 1 : 0;
@@ -143,6 +191,13 @@ static void handlePost(const String& body)
   Serial.print("[WEB] Saved. useBno="); Serial.print(azParams.useBno);
   Serial.print(" useGps=");             Serial.print(azParams.useGps);
   Serial.print(" beta=");               Serial.println(azParams.beta, 3);
+
+  if (needsReboot)
+  {
+    Serial.println("[WEB] Board setup changed - rebooting to apply.");
+  }
+
+  return needsReboot;
 }
 
 // -----------------------------------------------------------------
@@ -158,6 +213,27 @@ static void rowNum(EthernetClient& c,
   c.print("' value='"); c.print(val, dec);
   c.println("' step='any'>");
   c.print("<span class='unit'>"); c.print(unit); c.println("</span></div>");
+  if (desc && desc[0]) {
+    c.print("<div class='desc'>"); c.print(desc); c.println("</div>");
+  }
+}
+
+static void rowSelectStart(EthernetClient& c, const char* label, const char* name)
+{
+  c.print("<div class='row'><label>"); c.print(label); c.println("</label>");
+  c.print("<select name='"); c.print(name); c.println("'>");
+}
+
+static void rowSelectOption(EthernetClient& c, const char* value, const char* label, bool selected)
+{
+  c.print("<option value='"); c.print(value); c.print("'");
+  if (selected) c.print(" selected");
+  c.print(">"); c.print(label); c.println("</option>");
+}
+
+static void rowSelectEnd(EthernetClient& c, const char* desc)
+{
+  c.println("</select></div>");
   if (desc && desc[0]) {
     c.print("<div class='desc'>"); c.print(desc); c.println("</div>");
   }
@@ -199,6 +275,7 @@ static void sendPage(EthernetClient& c)
   c.println(".row{display:flex;align-items:center;margin:5px 0}");
   c.println(".row label{font-size:.84em;color:#bbb;flex:1;padding-right:6px}");
   c.println(".row input{width:88px;padding:4px 7px;background:#16213e;color:#eee;border:1px solid #0f3460;border-radius:4px;font-size:.93em}");
+  c.println(".row select{width:220px;padding:4px 7px;background:#16213e;color:#eee;border:1px solid #0f3460;border-radius:4px;font-size:.93em}");
   c.println(".unit{font-size:.73em;color:#556;margin-left:5px;width:52px}");
   c.println(".trow{display:flex;align-items:center;margin:7px 0}");
   c.println(".tlabel{font-size:.84em;color:#bbb;flex:1;padding-right:6px}");
@@ -285,8 +362,64 @@ static void sendPage(EthernetClient& c)
   }
 
   c.println("<form method='POST' action='/save'>");
+
+  // ================================================================
+  // SECTION 0: BOARD SETUP
+  // ================================================================
+  c.println("<h2>&#128736; Board setup</h2>");
+
+  c.print("<div class='desc' style='color:#f0a030;margin-bottom:9px'>");
+  c.print("Everything in this section only takes effect after a reboot - saving a change here restarts the board automatically.");
+  c.println("</div>");
+
+  rowSelectStart(c, "Steering driver", "steerDriverType");
+  rowSelectOption(c, "0", "Hydraulic / DC valve (Cytron, IBT2, Danfoss)", steerConfig.SteerDriverType == 0);
+  rowSelectOption(c, "1", "Keya CAN motor", steerConfig.SteerDriverType == 1);
+  rowSelectEnd(c, "");
+
+  rowSelectStart(c, "Kickout sensor type", "pressureSensorType");
+  rowSelectOption(c, "0", "Generic analog / pulse-count", steerConfig.PressureSensorType == 0);
+  rowSelectOption(c, "1", "John Deere (PWM duty cycle)", steerConfig.PressureSensorType == 1);
+  rowSelectOption(c, "2", "Danfoss (pulse frequency)", steerConfig.PressureSensorType == 2);
+  rowSelectEnd(c, "Only matters if AgOpenGPS's steer settings has the pressure-sensor kickout enabled.");
+
+  rowNum(c,
+    "Danfoss max frequency",
+    "pressureSensorMaxHz", pressureSensorMaxHz, 0, "Hz",
+    "Pulse frequency that reads as 100% pressure. Only used when the kickout sensor type above is Danfoss.");
+
+  c.println("<hr class='sep'>");
+
+  rowSelectStart(c, "GPS receivers", "gpsCount");
+  rowSelectOption(c, "1", "1 (single antenna)", portConfig.gpsCount == 1);
+  rowSelectOption(c, "2", "2 (dual antenna)", portConfig.gpsCount == 2);
+  rowSelectEnd(c, "");
+
+  rowSelectStart(c, "GPS 1 port", "gps1Port");
+  rowSelectOption(c, "0", "Auto-detect", portConfig.gps1Port == 0);
+  rowSelectOption(c, "1", "Serial2", portConfig.gps1Port == 1);
+  rowSelectOption(c, "2", "Serial5", portConfig.gps1Port == 2);
+  rowSelectOption(c, "3", "Serial7", portConfig.gps1Port == 3);
+  rowSelectEnd(c, "");
+
+  rowSelectStart(c, "GPS 2 port", "gps2Port");
+  rowSelectOption(c, "0", "Auto-detect", portConfig.gps2Port == 0);
+  rowSelectOption(c, "1", "Serial2", portConfig.gps2Port == 1);
+  rowSelectOption(c, "2", "Serial5", portConfig.gps2Port == 2);
+  rowSelectOption(c, "3", "Serial7", portConfig.gps2Port == 3);
+  rowSelectEnd(c, "Only used when GPS receivers above is 2.");
+
+  rowSelectStart(c, "TM171 IMU port", "tm171Port");
+  rowSelectOption(c, "0", "Auto-detect", portConfig.tm171Port == 0);
+  rowSelectOption(c, "1", "Serial2", portConfig.tm171Port == 1);
+  rowSelectOption(c, "2", "Serial5", portConfig.tm171Port == 2);
+  rowSelectOption(c, "3", "Serial7", portConfig.tm171Port == 3);
+  rowSelectEnd(c, "Leave on Auto-detect unless it isn't finding your TM171 - then pick the port it's actually wired to. A manual pick is also tried even if a CMPS/BNO was already found (auto-detect skips the TM171 probe in that case).");
+
+  c.println("<hr class='sep'>");
+
   c.print("<div class='desc' style='color:#888;margin:-6px 0 12px'>");
-  c.print("These settings only take effect when the driver type is Keya CAN and the AOG \"Danfoss\" checkbox is on (wasless mode).");
+  c.print("Everything below only applies when the driver type above is Keya CAN and the AOG \"Danfoss\" checkbox is on (wasless mode).");
   c.println("</div>");
 
   // ================================================================
@@ -533,8 +666,10 @@ void webConfigLoop()
     }
   }
 
+  bool needsReboot = false;
+
   if (isPost && body.length() > 0) {
-    handlePost(body);
+    needsReboot = handlePost(body);
     sendRedirect(client);
   } else {
     sendPage(client);
@@ -542,6 +677,12 @@ void webConfigLoop()
 
   delay(1);
   client.stop();
+
+  if (needsReboot)
+  {
+    delay(200); // let the redirect response actually leave the wire before resetting
+    SCB_AIRCR = 0x05FA0004; // Teensy reset - same mechanism used for a subnet change
+  }
 }
 
 #endif // ARDUINO_TEENSY41

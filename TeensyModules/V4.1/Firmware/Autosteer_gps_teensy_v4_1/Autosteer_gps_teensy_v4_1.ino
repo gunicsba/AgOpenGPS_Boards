@@ -157,6 +157,58 @@ elapsedMillis TM171lastData;
 elapsedMillis imuTimer;
 bool imuTrigger = false;
 
+// ---- Serial port assignment (Board Setup page, zWebConfig.ino) ----
+// AUTO preserves the existing auto-detect behavior; an explicit value skips detection
+// entirely for that role. Lets an installer route around detection order-effects (e.g. a
+// CMPS14 false-detect blocking the TM171 probe) or a receiver too slow for the auto window.
+#include <EEPROM.h>
+#define SERIAL_PORT_AUTO 0
+#define SERIAL_PORT_2    1
+#define SERIAL_PORT_5    2
+#define SERIAL_PORT_7    3
+#define EEPROM_ADDR_PORT_CONFIG 200
+
+struct PortConfig {
+  uint8_t  gpsCount  = 1;               // 1 or 2 GPS receivers
+  uint8_t  gps1Port  = SERIAL_PORT_AUTO;
+  uint8_t  gps2Port  = SERIAL_PORT_AUTO; // only used when gpsCount == 2
+  uint8_t  tm171Port = SERIAL_PORT_AUTO;
+  uint16_t ident     = 0xC0F1;
+}; PortConfig portConfig;
+
+HardwareSerial* portFromConfig(uint8_t v, HardwareSerial* autoDefault)
+{
+  switch (v) {
+    case SERIAL_PORT_2: return &Serial2;
+    case SERIAL_PORT_5: return &Serial5;
+    case SERIAL_PORT_7: return &Serial7;
+    default:            return autoDefault;
+  }
+}
+
+const char* portName(uint8_t v)
+{
+  switch (v) {
+    case SERIAL_PORT_2: return "Serial2";
+    case SERIAL_PORT_5: return "Serial5";
+    case SERIAL_PORT_7: return "Serial7";
+    default:            return "Auto";
+  }
+}
+
+void portConfigLoad()
+{
+  PortConfig saved;
+  EEPROM.get(EEPROM_ADDR_PORT_CONFIG, saved);
+  if (saved.ident == 0xC0F1) portConfig = saved;
+  else EEPROM.put(EEPROM_ADDR_PORT_CONFIG, portConfig);
+}
+
+void portConfigSave()
+{
+  EEPROM.put(EEPROM_ADDR_PORT_CONFIG, portConfig);
+}
+
 //CMPS always x60
 #define CMPS14_ADDRESS 0x60
 
@@ -237,6 +289,13 @@ struct ubxPacket
 	////sfe_ublox_packet_validity_e classAndIDmatch; // Goes from NOT_DEFINED to VALID or NOT_VALID when the Class and ID match the requestedClass and requestedID
 };
 
+// Explicit forward declarations for both calcChecksum() overloads (RELPOSNED and UBX) -
+// Arduino's ctags-based auto-prototype generator is a text heuristic, not a real parser,
+// and can fail to pick up one overload depending on unrelated code shifting elsewhere in
+// the sketch. Declaring both here removes that fragility.
+bool calcChecksum();
+void calcChecksum(ubxPacket *msg);
+
 // Setup procedure ------------------------
 void setup()
 {
@@ -264,33 +323,53 @@ void setup()
   delay(10);
   Serial.println("Start setup");
 
-  Serial.println("Detecting GNSS port (Serial2 / Serial7)...");
-  bool foundGnssOnSerial2 = detectGGAOnPort(&Serial2, 300);
-  bool foundGnssOnSerial7 = false;
+  portConfigLoad();
 
-  if (!foundGnssOnSerial2)
+  if (portConfig.gps1Port != SERIAL_PORT_AUTO)
   {
-    foundGnssOnSerial7 = detectGGAOnPort(&Serial7, 300);
-  }
+    SerialGPS = portFromConfig(portConfig.gps1Port, &Serial2);
+    Serial.print("GPS1 manually assigned to "); Serial.println(portName(portConfig.gps1Port));
 
-  if (foundGnssOnSerial7)
-  {
-    Serial.println("GNSS detected on Serial7");
-    SerialGPS = &Serial7;
-    SerialGPS2 = &Serial2;
-  }
-  else
-  {
-    if (foundGnssOnSerial2)
+    if (portConfig.gpsCount == 2 && portConfig.gps2Port != SERIAL_PORT_AUTO)
     {
-      Serial.println("GNSS detected on Serial2");
+      SerialGPS2 = portFromConfig(portConfig.gps2Port, &Serial5);
+      Serial.print("GPS2 manually assigned to "); Serial.println(portName(portConfig.gps2Port));
     }
     else
     {
-      Serial.println("GNSS not detected on Serial2 or Serial7, using defaults");
+      SerialGPS2 = (SerialGPS == &Serial7) ? &Serial2 : &Serial5;
     }
-    SerialGPS = &Serial2;
-    SerialGPS2 = &Serial5;
+  }
+  else
+  {
+    Serial.println("Detecting GNSS port (Serial2 / Serial7)...");
+    bool foundGnssOnSerial2 = detectGGAOnPort(&Serial2, 300);
+    bool foundGnssOnSerial7 = false;
+
+    if (!foundGnssOnSerial2)
+    {
+      foundGnssOnSerial7 = detectGGAOnPort(&Serial7, 300);
+    }
+
+    if (foundGnssOnSerial7)
+    {
+      Serial.println("GNSS detected on Serial7");
+      SerialGPS = &Serial7;
+      SerialGPS2 = &Serial2;
+    }
+    else
+    {
+      if (foundGnssOnSerial2)
+      {
+        Serial.println("GNSS detected on Serial2");
+      }
+      else
+      {
+        Serial.println("GNSS not detected on Serial2 or Serial7, using defaults");
+      }
+      SerialGPS = &Serial2;
+      SerialGPS2 = &Serial5;
+    }
   }
 
   SerialGPS->begin(baudGPS);
@@ -388,7 +467,34 @@ void setup()
           }
           if (useBNO08x) break;
       }
+  }
 
+  // TM171 detection: a manual port assignment always wins and is tried regardless of
+  // whether a CMPS/BNO was found (previously TM171 was never even probed once a CMPS
+  // falsely ACKed on the I2C bus, since the whole block was nested inside `if (!useCMPS)`).
+  // Auto-probe only runs when nothing was configured AND no other IMU was already found.
+  if (portConfig.tm171Port != SERIAL_PORT_AUTO)
+  {
+      HardwareSerial* forcedPort = portFromConfig(portConfig.tm171Port, &Serial5);
+      Serial.print("\r\nTM171 manually assigned to "); Serial.println(portName(portConfig.tm171Port));
+
+      if (forcedPort == SerialGPS || forcedPort == SerialGPS2)
+      {
+          Serial.println("WARNING: TM171 port matches a GPS port - check wiring, this will conflict.");
+      }
+
+      if (TM171detectOnPort(forcedPort, 1500))
+      {
+          Serial.println("TM171 confirmed on the assigned port.");
+          useTM171 = true;
+      }
+      else
+      {
+          Serial.println("TM171 not responding on the assigned port - check wiring/power.");
+      }
+  }
+  else if (!useCMPS && !useBNO08x)
+  {
         Serial.println("\r\nChecking for TM171 on Serial7 / Serial5");
 
         bool foundTM171 = false;

@@ -30,6 +30,14 @@
 #define STEER_DRIVER_HYDRAULIC 0   // Cytron / IBT2 / Danfoss-valve PWM
 #define STEER_DRIVER_KEYA 1        // Keya CAN motor (see KeyaCANBUS.ino)
 
+//   ***********  Kickout pressure-sensor type (only matters when steerConfig.PressureSensor)
+// Replaces the old compile-time JOHNDEERE flag with a runtime, web-UI-selectable choice.
+#define PRESSURE_SENSOR_GENERIC   0  // analog voltage, read directly
+#define PRESSURE_SENSOR_JOHNDEERE 1  // PWM duty cycle (JD factory sensor)
+#define PRESSURE_SENSOR_DANFOSS   2  // pulse frequency mapped to pressure %
+#define EEPROM_ADDR_PRESSURE_MAX_HZ 190  // float - frequency (Hz) that reads as 100% for PRESSURE_SENSOR_DANFOSS
+float pressureSensorMaxHz = 200.0f;
+
 //   ***********  Wasless (Keya-encoder-as-WAS) mode  **************888
 // Active only when SteerDriverType == STEER_DRIVER_KEYA and the AOG "Danfoss" checkbox
 // (steerConfig.IsDanfoss) is set - reusing that bit is safe because a real Danfoss valve
@@ -108,10 +116,15 @@ extern AutoZeroParams azParams;
 //Define sensor pin for current or pressure sensor
 #define CURRENT_SENSOR_PIN A17
 #define PRESSURE_SENSOR_PIN A10
-#define JOHNDEERE false
 elapsedMicros dutyTime = 0;
 float dutyTimeCurrent = 0;
 float dutyTimePrev = 0;
+
+// Danfoss pulse-frequency pressure sensor (PRESSURE_SENSOR_DANFOSS)
+volatile uint32_t danfossPulseCount = 0;
+elapsedMillis danfossWindowTimer = 0;
+const uint16_t DANFOSS_WINDOW_MS = 200;
+void ISRDanfossPulse() { danfossPulseCount++; }
 
 #define CONST_180_DIVIDED_BY_PI 57.2957795130823
 
@@ -226,7 +239,8 @@ struct Setup {
   uint8_t IsDanfoss = 0;
   uint8_t IsUseY_Axis = 0;     //Set to 0 to use X Axis, 1 to use Y avis
   uint8_t SteerDriverType = STEER_DRIVER_HYDRAULIC;  //STEER_DRIVER_HYDRAULIC or STEER_DRIVER_KEYA
-}; Setup steerConfig;               // 14 bytes
+  uint8_t PressureSensorType = PRESSURE_SENSOR_GENERIC;  //only used when PressureSensor == 1
+}; Setup steerConfig;               // 15 bytes
 
 void steerConfigInit()
 {
@@ -252,6 +266,31 @@ void ISRJOHNDEEREFALLING(){
   attachInterrupt(digitalPinToInterrupt(PRESSURE_SENSOR_PIN), ISRJOHNDEERERISING, RISING);
   dutyTimeCurrent = dutyTime;
   return;
+}
+
+// Sets up PRESSURE_SENSOR_PIN for whichever PressureSensorType is configured. Must run after
+// steerConfig is loaded from EEPROM (called from autosteerSetup(), below), since it used to
+// run off a compile-time flag before the runtime value even existed.
+void pressureSensorInit()
+{
+  detachInterrupt(digitalPinToInterrupt(PRESSURE_SENSOR_PIN));
+
+  if (steerConfig.PressureSensorType == PRESSURE_SENSOR_JOHNDEERE)
+  {
+    pinMode(PRESSURE_SENSOR_PIN, INPUT);
+    attachInterrupt(digitalPinToInterrupt(PRESSURE_SENSOR_PIN), ISRJOHNDEERERISING, RISING);
+  }
+  else if (steerConfig.PressureSensorType == PRESSURE_SENSOR_DANFOSS)
+  {
+    pinMode(PRESSURE_SENSOR_PIN, INPUT);
+    danfossPulseCount  = 0;
+    danfossWindowTimer = 0;
+    attachInterrupt(digitalPinToInterrupt(PRESSURE_SENSOR_PIN), ISRDanfossPulse, RISING);
+  }
+  else
+  {
+    pinMode(PRESSURE_SENSOR_PIN, INPUT_DISABLE);
+  }
 }
 
 
@@ -287,14 +326,8 @@ void autosteerSetup()
 
   // Disable digital inputs for analog input pins
   pinMode(CURRENT_SENSOR_PIN, INPUT_DISABLE);
-  if( JOHNDEERE ) 
-  {
-    pinMode(PRESSURE_SENSOR_PIN, INPUT);
-    attachInterrupt(digitalPinToInterrupt(PRESSURE_SENSOR_PIN), ISRJOHNDEERERISING, RISING);  
-  } else {
-    pinMode(PRESSURE_SENSOR_PIN, INPUT_DISABLE);
-  }
-    
+  // PRESSURE_SENSOR_PIN mode depends on steerConfig.PressureSensorType, set up below via
+  // pressureSensorInit() once steerConfig has actually been loaded from EEPROM.
 
   //set up communication
   Wire1.end();
@@ -343,6 +376,7 @@ void autosteerSetup()
 
   steerSettingsInit();
   steerConfigInit();
+  pressureSensorInit();
 
   // Restore the Keya encoder ticks-per-degree mechanical calibration
   {
@@ -353,6 +387,17 @@ void autosteerSetup()
     else
       keyaTicksPerDeg = KEYA_TICKS_PER_DEG_DEFAULT;
   }
+
+  // Restore the Danfoss pulse-frequency calibration (frequency that reads as 100% pressure)
+  {
+    float savedHz = 0.0f;
+    EEPROM.get(EEPROM_ADDR_PRESSURE_MAX_HZ, savedHz);
+    if (!isnan(savedHz) && !isinf(savedHz) && savedHz > 1.0f && savedHz < 5000.0f)
+      pressureSensorMaxHz = savedHz;
+    else
+      pressureSensorMaxHz = 200.0f;
+  }
+
   wasZeroDone = false; // the zero must be re-established every boot
 
   if (Autosteer_running)
@@ -457,35 +502,42 @@ void autosteerLoop()
     // Pressure sensor?
     if (steerConfig.PressureSensor)
     {
-      if(JOHNDEERE){
-        if(dutyTimeCurrent > 100 && dutyTimeCurrent < 4500) 
+      if (steerConfig.PressureSensorType == PRESSURE_SENSOR_JOHNDEERE)
+      {
+        if(dutyTimeCurrent > 100 && dutyTimeCurrent < 4500)
         {
-//          Serial.print(" , dutyTimeCurrent: ");
-//          Serial.print(dutyTimeCurrent);
-          //current dutyTime should be between 
+          //current dutyTime should be between
           if(abs(dutyTimeCurrent - dutyTimePrev) < 1000) // if it's more than 2000 we jumped...
           {
             sensorSample = abs((double)dutyTimeCurrent-2600)/5; //should make it into a smoother transition around 95 to 5 percent
-//            Serial.print(" , sensorSample: ");
-//            Serial.print(sensorSample);
            sensorReading = (min(abs( ( abs((double)dutyTimePrev-2600)/5 ) - sensorSample),255) * 0.6) + (sensorReading * 0.4);
-//            Serial.print(" , sensorReading: ");
-//            Serial.println(sensorReading);
           } else {
             sensorReading = 0;
-//            Serial.print(" , sensorReading: ");
-//            Serial.println(sensorReading);
           }
           dutyTimePrev = dutyTimeCurrent;
-        } else {
-//          Serial.print(" , dutyTimeCurrent else: ");
-//          Serial.println(dutyTimeCurrent);
-          
         }
-      } else {
-      sensorSample = (float)analogRead(PRESSURE_SENSOR_PIN);
-      sensorSample *= 0.25;
-      sensorReading = sensorReading * 0.6 + sensorSample * 0.4;
+      }
+      else if (steerConfig.PressureSensorType == PRESSURE_SENSOR_DANFOSS)
+      {
+        if (danfossWindowTimer >= DANFOSS_WINDOW_MS)
+        {
+          noInterrupts();
+          uint32_t count = danfossPulseCount;
+          danfossPulseCount = 0;
+          uint32_t windowMs = danfossWindowTimer;
+          danfossWindowTimer = 0;
+          interrupts();
+
+          float hz = (float)count * 1000.0f / (float)windowMs;
+          sensorSample = constrain((hz / pressureSensorMaxHz) * 255.0f, 0.0f, 255.0f);
+          sensorReading = sensorReading * 0.6f + sensorSample * 0.4f;
+        }
+      }
+      else // PRESSURE_SENSOR_GENERIC
+      {
+        sensorSample = (float)analogRead(PRESSURE_SENSOR_PIN);
+        sensorSample *= 0.25;
+        sensorReading = sensorReading * 0.6 + sensorSample * 0.4;
       }
 
       if (sensorReading >= steerConfig.PulseCountMax)
