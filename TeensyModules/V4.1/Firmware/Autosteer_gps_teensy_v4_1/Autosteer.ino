@@ -487,22 +487,21 @@ void autosteerLoop()
 
     if (watchdogTimer < WATCHDOG_THRESHOLD)
     {
-      //Enable H Bridge for IBT2, hyd aux, etc for cytron - not applicable to the Keya CAN motor
-      if (steerConfig.SteerDriverType == STEER_DRIVER_HYDRAULIC)
+      //Enable H Bridge for IBT2, hyd aux, etc for cytron. On this board the same Cytron-enable
+      //line also drives the steer-button LED backlight ("lock" circuit), so it runs for every
+      //SteerDriverType, not just hydraulic - only the actual motor command differs, in motorDrive().
+      if (steerConfig.CytronDriver)
       {
-        if (steerConfig.CytronDriver)
+        if (steerConfig.IsRelayActiveHigh)
         {
-          if (steerConfig.IsRelayActiveHigh)
-          {
-            digitalWrite(PWM2_RPWM, 0);
-          }
-          else
-          {
-            digitalWrite(PWM2_RPWM, 1);
-          }
+          digitalWrite(PWM2_RPWM, 0);
         }
-        else digitalWrite(DIR1_RL_ENABLE, 1);
+        else
+        {
+          digitalWrite(PWM2_RPWM, 1);
+        }
       }
+      else digitalWrite(DIR1_RL_ENABLE, 1);
 
       steerAngleError = steerAngleActual - steerAngleSetPoint;   //calculate the steering error
       //if (abs(steerAngleError)< steerSettings.lowPWM) steerAngleError = 0;
@@ -517,22 +516,20 @@ void autosteerLoop()
     else
     {
       //we've lost the comm to AgOpenGPS, or just stop request
-      //Disable H Bridge for IBT2, hyd aux, etc for cytron - not applicable to the Keya CAN motor
-      if (steerConfig.SteerDriverType == STEER_DRIVER_HYDRAULIC)
+      //Disable H Bridge for IBT2, hyd aux, etc for cytron - also turns off the steer-button LED
+      //backlight via the same lock circuit, for every SteerDriverType (see enable-side comment above)
+      if (steerConfig.CytronDriver)
       {
-        if (steerConfig.CytronDriver)
+        if (steerConfig.IsRelayActiveHigh)
         {
-          if (steerConfig.IsRelayActiveHigh)
-          {
-            digitalWrite(PWM2_RPWM, 1);
-          }
-          else
-          {
-            digitalWrite(PWM2_RPWM, 0);
-          }
+          digitalWrite(PWM2_RPWM, 1);
         }
-        else digitalWrite(DIR1_RL_ENABLE, 0); //IBT2
+        else
+        {
+          digitalWrite(PWM2_RPWM, 0);
+        }
       }
+      else digitalWrite(DIR1_RL_ENABLE, 0); //IBT2
 
       pwmDrive = 0; //turn off steering motor
       if (steerConfig.SteerDriverType == STEER_DRIVER_KEYA) disableKeyaSteer(); //lost comms with AOG - definitely stop steering
