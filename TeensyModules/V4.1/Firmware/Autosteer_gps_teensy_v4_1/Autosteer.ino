@@ -21,10 +21,13 @@
 /////////////////////////////////////////////
 
 // if not in eeprom, overwrite
-// Bumped from 2400 for the SteerDriverType field added to Setup - forces a clean re-init on
-// first boot of this firmware. Losing the old hydraulic-lift/steer settings on that one upgrade
-// is accepted; nothing here tries to preserve them byte-for-byte across the layout change.
-#define EEP_Ident 2500
+// Bumped from 2400 for the SteerDriverType field added to Setup (Phase 1), and again from
+// 2500 for the PressureSensorType field (Phase 3) - each forces a clean re-init on first boot
+// after the struct's shape changes. Without the bump, the new trailing byte(s) get read as
+// whatever garbage was already sitting in that EEPROM region, not a defined default - harmless
+// here since PressureSensorType treats any unrecognized value as generic, but not something to
+// rely on. Losing old hydraulic-lift/steer settings on the upgrade itself is accepted.
+#define EEP_Ident 2501
 
 //   ***********  Steering driver type  **************888
 #define STEER_DRIVER_HYDRAULIC 0   // Cytron / IBT2 / Danfoss-valve PWM

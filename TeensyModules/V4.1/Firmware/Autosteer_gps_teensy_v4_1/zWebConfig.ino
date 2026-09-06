@@ -320,7 +320,12 @@ static void sendPage(EthernetClient& c)
   c.print("Zero established: ");
   if (wasZeroDone) c.print("<span class='ok'>&#10003; YES</span>");
   else             c.print("<span class='nok'>&#10007; NO</span>");
-  c.println("</div>");
+  c.print("<br>&#129504; IMU detected: <b>");
+  if (useTM171)       c.print("TM171");
+  else if (useBNO08x) c.print("BNO08x");
+  else if (useCMPS)   c.print("CMPS14");
+  else                c.print("<span class='nok'>none</span>");
+  c.println("</b></div>");
 
   // ---- AUTO-ZERO TRACKING ----
   {
