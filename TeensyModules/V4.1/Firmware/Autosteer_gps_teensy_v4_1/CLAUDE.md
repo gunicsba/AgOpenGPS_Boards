@@ -127,6 +127,60 @@ When adding a new persisted value: pick an address with a comfortable gap from i
 (structs' actual compiled size can differ from a naive field count due to alignment padding),
 and add a row to this table in the same commit.
 
+## OTA firmware updates
+
+Built on [FlasherX](https://github.com/joepasquariello/FlasherX)'s flash primitives
+(`FlashTxx.h`/`FlashTxx.c`, vendored **unmodified** in this folder — don't hand-edit them,
+pull a fresh copy from upstream if a real change is ever needed there). `FlashTxx.c` is a
+plain `.c` file on purpose; it compiles as C, and `zOTA.ino` wraps its header include in
+`extern "C" { ... }` when pulling those declarations into C++.
+
+Deliberately **not** using FlasherX's own `update_firmware()` (in its `FXUtil.cpp`, not
+vendored here) — that one is interactive, prompting for confirmation over the same `Stream`
+it's reading the hex file from, which has no equivalent over a one-shot HTTP POST. Instead
+`zOTA.ino` implements an explicit two-step flow:
+
+- `GET /ota` — upload form (the 4th web nav tab).
+- `POST /ota/stage` — streams the uploaded `.hex` directly off the TCP connection into a
+  flash-based staging buffer above the running code, parsing and flash-writing one Intel HEX
+  line at a time. Never buffers the whole upload in RAM — this matters, since a real `.hex`
+  for this sketch is several hundred KB of ASCII. Validates the `FLASH_ID` marker (below)
+  before allowing a flash. Uploading alone never flashes anything.
+- `POST /ota/confirm` — copies the staged image into place and reboots into it
+  (`flash_move()`). Point of no return for that session: recoverable via USB + the physical
+  PROGRAM button if something goes wrong, same as any other bad flash, but the running
+  firmware cannot undo it once `flash_move()` starts (it doesn't return — it reboots
+  partway through).
+- `POST /ota/cancel` — frees the staged buffer, discards it.
+
+**The `FLASH_ID` marker is load-bearing, not just a log line.** `otaSetup()` in `zOTA.ino`
+does `Serial.println(FLASH_ID)` at boot — that's what forces the compiler to embed the
+literal string `"fw_teensy41"` somewhere in this build's own flash content. `check_flash_id()`
+scans a *newly uploaded* image for that same string before allowing a flash, to confirm it
+was actually built for this exact board (not a Teensy 4.0 build, not an unrelated project's
+hex file). If a future firmware ever drops that print line, OTA uploads will still stage
+successfully but will always get rejected at the `FLASH_ID` check — keep it.
+
+Why `webConfigLoop()`'s normal request handling doesn't apply to `/ota/stage`: every other
+POST handler buffers the whole body into a `String` before processing. For a firmware upload
+that's the wrong shape (RAM pressure, and no reason to hold the whole file at once) — so
+`webConfigLoop()` special-cases `/ota/stage` to leave the body untouched on the still-open
+`EthernetClient` and hand it directly to `otaStageFromClient()`, which reads it as a `Stream`
+(same interface FlasherX itself expects — `EthernetClient` already implements `Stream`).
+
+`OtaStageResult` and the functions that take/return it needed their own explicit forward
+declarations positioned right after the struct/typedef definitions in `zOTA.ino`, same
+pattern and same reason as the `calcChecksum()` fix in the main `.ino` — Arduino's
+auto-prototype generator hoists a prototype for every function to the top of the
+concatenated sketch, before a type defined further down in the same file would exist yet.
+
+**Not yet live-tested.** Compiles clean and the design has been reasoned through carefully,
+but the actual upload → stage → confirm → `flash_move()` → reboot cycle has never been
+exercised against real hardware. Test deliberately, with the physical USB/PROGRAM-button
+recovery path confirmed working first (it already is, on this project's bench unit) — this
+is the one piece of this whole firmware where a bug has a real chance of requiring that
+recovery path, not just an inconvenience.
+
 ## Things that were deliberately decided, not overlooked
 
 - **AgOpenGPS itself is out of scope.** No new PGN 251 bits, no changes to the desktop app.
@@ -149,9 +203,10 @@ and add a row to this table in the same commit.
   engage logic — this is what the RFC's "Keya can't engage under None" open question expected
   to resolve as a side effect, since the branch it lived in doesn't exist anymore; not
   independently re-verified on hardware after the rewrite, just structurally true.
-- **OTA firmware updates are not implemented.** Planned approach is FlasherX (writes to the
-  Teensy 4.1's onboard QSPI flash) plus a `POST /update` route on the existing web server —
-  needs its own safety spike (rollback on a bad image) before it's trusted in the field.
+- **OTA firmware updates are implemented but not yet live-tested.** See the "OTA firmware
+  updates" section above for the full design (FlasherX-based, explicit stage/confirm/cancel
+  over the web UI). There's no automatic rollback on a bad image — the safety net is the
+  `FLASH_ID` check at stage time plus the explicit confirm step, not an undo after the fact.
 
 ## Debugging on the bench
 

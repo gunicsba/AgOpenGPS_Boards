@@ -332,13 +332,14 @@ static void sendHead(EthernetClient& c, const char* title, bool autoRefresh)
   c.println("<h1>&#9881; AgOpenGPS Board Config</h1>");
 }
 
-// 0 = Status, 1 = Board, 2 = Wasless
+// 0 = Status, 1 = Board, 2 = Wasless, 3 = OTA
 static void sendNav(EthernetClient& c, uint8_t activeTab)
 {
   c.print("<div class='nav'>");
   c.print("<a href='/'");        if (activeTab == 0) c.print(" class='active'"); c.print(">&#128202; Status</a>");
   c.print("<a href='/board'");   if (activeTab == 1) c.print(" class='active'"); c.print(">&#128736; Board</a>");
   c.print("<a href='/wasless'"); if (activeTab == 2) c.print(" class='active'"); c.print(">&#127919; Wasless</a>");
+  c.print("<a href='/ota'");     if (activeTab == 3) c.print(" class='active'"); c.print(">&#128228; OTA</a>");
   c.println("</div>");
 }
 
@@ -713,8 +714,10 @@ void webConfigLoop()
   String   requestLine = "";
   String   body        = "";
   bool     isPost      = false;
-  int      contentLen  = 0;
+  long     contentLen  = 0;
   bool     headersDone = false;
+  bool     isOtaStage  = false; // POST /ota/stage - body is read raw off the stream, never
+                                 // buffered into `body`, since it can be several hundred KB
   String   line        = "";
 
   while (client.connected() && (millis() - t < 200))
@@ -731,7 +734,8 @@ void webConfigLoop()
         if (line.startsWith("Content-Length:")) contentLen = line.substring(16).toInt();
         if (line.length() <= 1) {
           headersDone = true;
-          if (!isPost) break;
+          isOtaStage = isPost && requestLine.indexOf("/ota/stage") >= 0;
+          if (!isPost || isOtaStage) break; // leave body bytes on the stream for OTA staging
         }
         line = "";
       }
@@ -743,7 +747,7 @@ void webConfigLoop()
 
     if (headersDone && isPost && contentLen > 0)
     {
-      while (client.available() && (int)body.length() < contentLen)
+      while (client.available() && (long)body.length() < contentLen)
         body += (char)client.read();
       break;
     }
@@ -751,12 +755,28 @@ void webConfigLoop()
 
   bool needsReboot = false;
 
-  if (isPost && requestLine.indexOf("/saveboard") >= 0 && body.length() > 0) {
+  if (isOtaStage) {
+    OtaStageResult otaResult = otaStageFromClient(client, (uint32_t)contentLen);
+    sendOtaResultPage(client, otaResult);
+    delay(1);
+    client.stop();
+    return; // OTA has its own response path, skip the generic dispatch below
+  } else if (isPost && requestLine.indexOf("/ota/confirm") >= 0) {
+    handleOtaConfirm(client);
+    return; // may not return at all if it reboots into new firmware
+  } else if (isPost && requestLine.indexOf("/ota/cancel") >= 0) {
+    handleOtaCancel(client);
+    delay(1);
+    client.stop();
+    return;
+  } else if (isPost && requestLine.indexOf("/saveboard") >= 0 && body.length() > 0) {
     needsReboot = handleBoardPost(body);
     sendRedirect(client, "/board");
   } else if (isPost && requestLine.indexOf("/savewasless") >= 0 && body.length() > 0) {
     handleWaslessPost(body);
     sendRedirect(client, "/wasless");
+  } else if (requestLine.indexOf("/ota") >= 0) {
+    sendOtaPage(client);
   } else if (requestLine.indexOf("/wasless") >= 0) {
     sendWaslessPage(client);
   } else if (requestLine.indexOf("/board") >= 0) {

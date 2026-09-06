@@ -434,6 +434,8 @@ void setup()
   Serial.println("\r\nStarting Ethernet...");
   EthernetStart();
 
+  otaSetup(); // prints FLASH_ID - also what embeds it as a marker for future OTA uploads
+
   Serial.println("\r\nStarting Hydraulics...");
   HydraulicSetup();
 
