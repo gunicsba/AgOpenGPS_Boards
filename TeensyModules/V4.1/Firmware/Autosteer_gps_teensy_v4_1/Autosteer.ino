@@ -201,10 +201,19 @@ float gpsSpeed = 0;
 float steerAngleActual = 0;
 float steerAngleSetPoint = 0; //the desired angle from AgOpen
 int16_t steeringPosition = 0; //from steering sensor
+
+// Raw WAS ADC counts (0-6805 = 0-5V, post bit-shift, pre wasOffset/AckermanFix) - kept
+// alongside steeringPosition purely for the status page's raw-inputs display, since
+// steeringPosition itself gets overwritten in place with the offset-adjusted value below.
+// Only meaningful when not in wasless mode (see the status page for that check).
+int16_t wasRawCounts = 0;
 float steerAngleError = 0; //setpoint - actual
 
 //pwm variables
 int16_t pwmDrive = 0, pwmDisplay = 0;
+// Direction captured before motorDrive() consumes pwmDrive's sign (Cytron/IBT2 both strip it
+// to get a 0-255 magnitude) - kept purely for the status page's Motor Output display.
+int8_t motorDir = 1;
 float pValue = 0;
 float errorAbs = 0;
 float highLowPerDeg = 0;
@@ -622,6 +631,7 @@ void autosteerLoop()
         adc.triggerConversion();//ADS1115 Single Mode
 
         steeringPosition = (steeringPosition >> 1); //bit shift by 2  0 to 13610 is 0 to 5v
+        wasRawCounts = steeringPosition;
         helloSteerPosition = steeringPosition - 6800;
       }
       else    //ADS1115 Differential Mode
@@ -631,6 +641,7 @@ void autosteerLoop()
         adc.triggerConversion();
 
         steeringPosition = (steeringPosition >> 1); //bit shift by 2  0 to 13610 is 0 to 5v
+        wasRawCounts = steeringPosition;
         helloSteerPosition = steeringPosition - 6800;
       }
 

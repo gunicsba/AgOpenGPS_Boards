@@ -26,6 +26,8 @@
 
 #ifdef ARDUINO_TEENSY41
 
+#include <malloc.h> // mallinfo(), for the free-heap diagnostic on the OTA page
+
 extern "C" {
   #include "FlashTxx.h"
 }
@@ -269,6 +271,15 @@ static void sendOtaPage(EthernetClient &c)
              "don't confirm.");
   c.println("</div>");
 
+  // Diagnostic for staging-buffer failures: the compiler's static "free for malloc/new"
+  // estimate doesn't account for NativeEthernet's own runtime-allocated socket buffers, so it
+  // overstates what's actually available - this shows the real number instead.
+  {
+    struct mallinfo mi = mallinfo();
+    c.print("<div class='desc' style='color:#7a8ab0;font-size:.72em;margin-bottom:10px'>Free heap right now: ");
+    c.print(mi.fordblks); c.println(" bytes</div>");
+  }
+
   c.println("<input type='file' id='hexfile' accept='.hex' style='width:100%;padding:8px;background:#16213e;color:#eee;border:1px solid #0f3460;border-radius:4px'>");
   c.println("<button id='uploadBtn' style='margin-top:12px'>&#128228; Upload &amp; verify</button>");
   c.println("<p id='otaStatus' class='foot'></p>");
@@ -331,7 +342,10 @@ static void handleOtaConfirm(EthernetClient &client)
   client.println("<!DOCTYPE html><html><body style='background:#1a1a2e;color:#eee;font-family:sans-serif;padding:24px'>");
   client.println("<h1>Flashing now...</h1><p>Do not disconnect power. The board restarts automatically in a few seconds.</p>");
   client.println("</body></html>");
-  client.flush();
+  // Do NOT call client.flush() here - see the EthernetClient::flush() deadlock note in
+  // CLAUDE.md (NativeEthernetClient.cpp:281 can spin forever if the socket's send buffer
+  // isn't fully drained, which would mean flash_move() below never runs at all). delay()
+  // + stop() is sufficient, same as everywhere else this codebase touches EthernetClient.
   delay(200); // let the response actually leave the wire before flash_move() takes over
   client.stop();
 

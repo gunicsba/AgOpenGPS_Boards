@@ -130,10 +130,35 @@ and add a row to this table in the same commit.
 ## OTA firmware updates
 
 Built on [FlasherX](https://github.com/joepasquariello/FlasherX)'s flash primitives
-(`FlashTxx.h`/`FlashTxx.c`, vendored **unmodified** in this folder — don't hand-edit them,
-pull a fresh copy from upstream if a real change is ever needed there). `FlashTxx.c` is a
-plain `.c` file on purpose; it compiles as C, and `zOTA.ino` wraps its header include in
-`extern "C" { ... }` when pulling those declarations into C++.
+(`FlashTxx.h`/`FlashTxx.c`, vendored in this folder). `FlashTxx.c` is untouched — it's a plain
+`.c` file on purpose, compiles as C, and `zOTA.ino` wraps its header include in
+`extern "C" { ... }` when pulling those declarations into C++; don't hand-edit it, pull a fresh
+copy from upstream if a real change there is ever needed. `FlashTxx.h` has **one intentional
+deviation** from upstream, in `FLASH_RESERVE` for `ARDUINO_TEENSY41` — `0x40*FLASH_SECTOR_SIZE`
+(256KB), not upstream's `4*FLASH_SECTOR_SIZE` (16KB). Root cause and the two dead ends tried
+first, for anyone touching this again:
+
+- Live-testing OTA first hit `"image too large for the staging buffer"`. `firmware_buffer_init()`
+  (`FlashTxx.c`) finds staging space by scanning *downward* from the top of flash for the first
+  non-erased byte. This sketch uses `EEPROM.h`, whose emulation on Teensy 4.x reserves the real
+  top **256KB** of flash for wear-leveling — with `FLASH_RESERVE` only excluding 16KB, the scan
+  ran straight into that EEPROM region's genuinely non-erased data (this project writes to
+  EEPROM constantly — `portConfig`, `azParams`, etc.) and stopped almost immediately, reporting
+  a tiny/invalid buffer. Confirmed against a community report of this exact failure and fix
+  ([PJRC forum, "OTA through Ethernet with Teensy 4.1"](https://forum.pjrc.com/index.php?threads/ota-through-ethernet-with-teensy-4-1.72233/)).
+  **Fix: size `FLASH_RESERVE` to actually cover the EEPROM emulation region.** Don't shrink it
+  back down while `EEPROM.h` is in use.
+- Before finding that, RAM-based staging (`RAM_BUFFER_SIZE > 0`, the *other* mode FlasherX
+  supports) was tried as a way to sidestep the flash-scan heuristic entirely. It's a dead end on
+  this specific build: real free heap at runtime measured only **~3.3KB** via `mallinfo()`
+  (added as a diagnostic on the `/ota` page — `mi.fordblks`), identical immediately after a
+  fresh reboot as after normal use, ruling out a runtime leak — something during `setup()`
+  itself (most likely `NativeEthernet`'s own FNET stack/socket buffers, not confirmed further)
+  consumes nearly all of RAM2, and the compiler's static "free for malloc/new" estimate
+  (~500KB) doesn't account for it at all. [A reference project](https://github.com/ssaenger/FlasherX-Ethernet_Support)
+  and the PJRC thread above both got RAM staging (200-256KB) working on Teensy 4.1, but both
+  use **QNEthernet**, not `NativeEthernet` — if RAM staging is ever worth revisiting, that
+  library difference is the first thing to look at, not the buffer size.
 
 Deliberately **not** using FlasherX's own `update_firmware()` (in its `FXUtil.cpp`, not
 vendored here) — that one is interactive, prompting for confirmation over the same `Stream`
@@ -218,8 +243,21 @@ recovery path, not just an inconvenience.
 The web config server (`zWebConfig.ino` + `zOTA.ino` + `zWebTerminal.ino`, default IP
 `192.168.5.126`) is five pages, on purpose:
 - `GET /` — Status: live WAS angle, speed, filtered GPS heading, wasless zero status, IMU
-  detected, a live "Wasless: ACTIVE/inactive" indicator. Auto-refreshes every 4s via a plain
-  `<meta http-equiv="refresh">` — safe to reload constantly since it has no inputs to lose.
+  detected, a "Wasless: ACTIVE/inactive" indicator, a Raw Inputs block (WAS pot ADC counts,
+  steer/work/remote switch pin states, kickout/current sensor reading), a Motor Output block
+  (PWM value, direction, the PWM2_RPWM lock/enable line, the DIR1_RL_ENABLE pin — labeled with
+  a note that pin *roles* differ by driver type: Cytron uses PWM1_LPWM as PWM+direction and
+  DIR1_RL_ENABLE as the actual direction pin while PWM2_RPWM is repurposed as enable/lock;
+  IBT2 uses PWM1_LPWM/PWM2_RPWM as separate forward/reverse channels and DIR1_RL_ENABLE just
+  enables both halves; Keya uses none of them, values shown are the CAN command instead), and
+  the Keya auto-zero tracking cards. Polls its own `/status/data` JSON endpoint every 400ms via `fetch()` and
+  patches values in place (element ids `s_*` in `sendStatusPage()`/`sendStatusData()`,
+  `zWebConfig.ino`) — no full-page reload, safe to poll constantly since it has no inputs to
+  lose. Used to be a `<meta http-equiv="refresh">` every 4s; switched to JS polling because a
+  quick button press could sit unreflected on screen for most of that 4s window even though
+  the firmware itself reacted immediately. Keep `/status/data`'s response small (see the
+  socket-buffer note in the terminal bugs section below) — it's plain numbers/short strings,
+  nowhere near the limit, but don't grow it into something that dumps large text.
 - `GET /board` — driver type, kickout sensor type + Danfoss Hz calibration, per-port serial
   role assignment, IMU anti-jitter EMA filters. `POST /saveboard` handles it, redirects back
   to `/board`, and may reboot the board (see the architecture section above).
@@ -232,13 +270,97 @@ The web config server (`zWebConfig.ino` + `zOTA.ino` + `zWebTerminal.ino`, defau
 - `GET /ota` — firmware update, see the OTA section above.
 - `GET /terminal` — remote serial terminal, see below.
 
-None of these auto-refresh except Status (the Terminal page polls its own data endpoint via
-`fetch()`, which is a different thing — no full-page reload happens there either). There used
-to be a single combined settings page with a JS "pause the reload while the user is editing"
+None of these do a full-page reload. Status and Terminal both poll their own JSON data endpoint
+via `fetch()` and patch the DOM in place (400ms and 2.5s respectively); Board/Wasless/OTA are
+plain forms with no live polling at all. There used to be a single combined settings page with
+a JS "pause the reload while the user is editing"
 guard, but it only watched `<input>` elements, not `<select>`, so dropdowns never paused it
 and the page could reload out from under someone mid-selection — don't reintroduce an
 auto-refreshing settings page without solving that class of bug properly (or just don't
 auto-refresh a page with a form on it).
+
+### Ethernet PHY needs a real power cycle after a soft reset — HTTP-specific
+
+Reproduced repeatedly during this session: after any soft reset of the board (a fresh
+`arduino-cli upload`, or `teensy_reboot`/the physical PROGRAM button), the web server (TCP,
+port 80) stays completely unreachable — not even ARP resolves — while UDP keeps working fine
+(AgOpenGPS traffic, `ReceiveUdp()`) and the board is otherwise alive (status LED blinking,
+`loop()` running). The only thing that recovers it is pulling power and reconnecting it, not
+just resetting the MCU.
+
+This points at the Teensy 4.1's on-board Ethernet PHY (the official add-on's chip, on the
+official RJ45/PHY circuit — not an external W5500/SPI chip) not getting properly
+re-initialized by a software-only reset, rather than a bug in this project's code: `NativeEthernet`'s
+`EthernetServer`/TCP path apparently depends on PHY link-state that only a real power-on reset
+clears reliably, while raw UDP transmission/reception doesn't hit whatever gets left wedged.
+This was NOT introduced by any change this session — it reproduced against known-good, previously
+committed code too, before any terminal/OTA work landed.
+
+**Practical consequence**: after every reflash, power-cycle the board before judging whether an
+HTTP-facing change (web config server, OTA, terminal) actually worked or not — a soft
+reset alone will look like a total regression even when the new code is fine.
+
+**Update — this PHY theory is now only a partial explanation, and "every reflash" turned out to
+be an overstatement.** While chasing the terminal view showing zero data despite confirmed real
+traffic, two concrete, unrelated-to-PHY bugs were found and fixed (both below): a real deadlock
+in the vendored `NativeEthernet` library, and a response bigger than the library's own
+per-socket buffer. Given the deadlock bug's shape — a blocking call inside the single-threaded
+request handler that only recovers via a full power-on reset — it's plausible some *other*
+blocking call already in this codebase (not necessarily `flush()`) causes some or all of the
+original "needs a power cycle" symptom too, rather than it purely being PHY link state.
+
+Later in the same session, several further reflashes (removing the UART bridge feature below,
+then adding the TM171 settings page) came back up on their own — **no power cycle needed** —
+even though nothing in those changes touched Ethernet/PHY init at all. The best available
+explanation: the power-cycle requirement was likely never an inherent property of *every*
+reflash, but was triggered by the heavy, rapid `curl` testing done earlier in the session
+(dozens of back-to-back connections while chasing the terminal bugs) — exactly the kind of
+connection churn this stack is fragile under. Once that stopped, later reflashes stayed
+healthy without it. This is a plausible explanation, not a confirmed one — don't state it as
+fact to a user without saying so. Practical takeaway: don't assume a power cycle is required
+after every reflash going forward, but don't be surprised if one occasionally still is,
+especially after a stretch of heavy HTTP testing against the board.
+
+### Two real bugs behind "terminal shows zero data despite confirmed live traffic"
+
+Both found by testing against `Serial2`, which the diagnostic line on `/terminal` (see below)
+confirmed was actually carrying the GPS's real 460800-baud traffic (`SerialGPS -> Serial2`,
+`totalBytes` counter climbing) — proving the tap/buffer plumbing itself was correct — while the
+page's live view stayed completely empty with no error, and even a single isolated `curl` to
+`/terminal/data` failed (`Empty reply from server` / `CONN_RESET`) after a long idle period.
+
+1. **`EthernetClient::flush()` in the vendored library never terminates under realistic
+   conditions.** `NativeEthernetClient.cpp:281`:
+   ```cpp
+   void EthernetClient::flush()
+   {
+       while (sockindex < Ethernet.socket_num) {
+           uint8_t stat = Ethernet.socketStatus(sockindex);
+           if (stat != SnSR::ESTABLISHED && stat != SnSR::CLOSE_WAIT) return;
+           if (Ethernet.socketSendAvailable(sockindex) >= Ethernet.socket_size) return;
+       }
+   }
+   ```
+   `sockindex` is never mutated in the loop body — the only way out is one of the two `return`s.
+   If the socket is `ESTABLISHED` and its send buffer isn't fully drained (exactly the case
+   right after writing a multi-KB response), this spins forever: draining that buffer requires
+   processing an incoming ACK, which requires the very `loop()` this call is currently blocking
+   to keep running. It was added here (briefly, then reverted — see `zWebConfig.ino`, end of
+   `webConfigLoop()`) to try to fix truncated responses and made things *worse* (consistent
+   `Failed to fetch` / timeouts) — that's what exposed the bug. **Do not call `.flush()` on an
+   `EthernetClient` in this codebase.** `client.stop()` alone is sufficient and doesn't have
+   this problem.
+2. **`/terminal/data`'s response could exceed the library's own per-socket buffer.**
+   `FNET_SOCKET_DEFAULT_SIZE` (`NativeEthernet.h`) is only **2048 bytes**. The old
+   `MAX_PER_POLL = 1024` produced up to 2048 hex characters alone, before the JSON wrapper —
+   enough to fill or exceed the entire TX buffer in one response. Once full, further writes
+   either stall (nothing will free the space — see bug 1, same underlying cause: freeing it
+   needs an ACK, which needs `loop()` to keep running) or get silently dropped, truncating the
+   JSON body with **no error visible on either side** — `fetch()` just gets a `200 OK` with a
+   broken body. Fixed by capping `MAX_PER_POLL` at 384 bytes in `zWebTerminal.ino` — comfortably
+   under the 2048-byte buffer with headroom for the JSON wrapper and other traffic. If you ever
+   need to raise this, keep it well under 2048 total (hex chars + wrapper), not just under 2048
+   hex chars.
 
 ### Remote serial terminal (`zWebTerminal.ino`)
 
@@ -271,6 +393,80 @@ the general pattern if you add another struct used as a function parameter anywh
 history around the Phase 2/3 commits for example payloads. Auto-zero debug logging goes to
 `Serial` at 115200 baud, prefixed `[AZ-PRECISE]`/`[AZ-FAST]`/`[AZ]`, and the `z` serial
 command opens a live tuning menu.
+
+### TM171 (SYD Dynamics) parameter read/write (`zWebImu.ino`)
+
+The `/imu` page reads and writes the TM171's own settings (UART1 baud rate, output/inhibit
+rate, accelerometer/magnetometer sensor-fusion gains) directly over its existing UART
+connection, using the IMU's native "EasyProtocol" configuration protocol — this replaced the
+raw TCP<->UART bridge idea below once it became clear the actual parameter set could just be
+sent over the wire ourselves, with no external tool or Windows virtual COM port needed at all.
+
+- **Protocol reference**: SYD Dynamics *TransducerM TM3xx User Guide v1.35-R1* (from
+  [syd-dynamics.com/download-center/](https://www.syd-dynamics.com/download-center/) — "For
+  newest TM171/TM151/TM210, please refer to this document"). Packet framing (`0xAA 0x55
+  [Package Length] [4-byte header: cmd:7,res:3,fromId:11,toId:11, little-endian, first-
+  declared-field=LSB] [payload] [CRC16 lo,hi]`) is identical to what `TM171.ino` already
+  parses on receive — `tm171SendObject()` in `zWebImu.ino` reuses `MODBUS_CRC16_v3()` from
+  `TM171.ino` unmodified, with the exact same buffer/count convention `GoodCRC()` already
+  uses. Verified against the manual's own worked example (`aa55080c08000016000000e0ed` =
+  broadcast Request for the Status object, id 22).
+- Two un-timestamped object types (unlike the RPY/Status/Euler/Raw/Gravity telemetry objects
+  `TM171.ino` parses, which all have a leading 4-byte timestamp before their named fields —
+  Setting and Request do not): **Request** (id 12, 4-byte payload: byte 0 = id of the object
+  being requested) and **Setting** (id 21, 20-byte payload: `switches`(u32) /
+  `reserved`(u16, must be 1152) / `uart1Baud`(u16, unit 100bps) / `canBaud`(u16) /
+  `gainAcc`(u16, unit 0.01) / `gainMag`(u16, unit 0.01) / `inhibitTime`(u16, ms) /
+  `silentTime`(u32, seconds)).
+- **The `switches` 32-bit bitfield's layout was reconstructed, not copied verbatim** — the
+  manual's own C struct listing got its comments reflowed/shifted by PDF text extraction, so
+  several field-to-comment pairings had to be inferred from *meaning* rather than trusted
+  literally. Cross-checked by confirming every reconstructed field's declared bit-width sums
+  to exactly 32 (only one specific reordering produces that). Confidence is high but not
+  absolute. Because of this, `tm171WriteSettings()` in `zWebImu.ino` **never synthesizes the
+  full `switches` word from scratch** — it only ever flips `TM171_SW_SAVE_PERMANENT` and
+  clears `TM171_SW_REQUEST_ACK` on top of a value most recently read from the real device
+  (`tm171Settings.switchesRaw`), and refuses to run at all until a real Setting-object
+  response has been received at least once. This is also literally what the manual itself
+  recommends: "firstly request Setting Object, make the modifications and then send back.
+  This ensures only setting of interest gets changed." If you ever need to touch one of the
+  other bits (sensor/output enables, boot mode, etc.), re-derive its position the same way
+  (cross-check against the 32-bit total) before trusting it — don't assume the existing
+  `TM171_SW_*` defines cover bits they don't already define.
+- If the UART1 baud rate is actually changed, `tm171WriteSettings()` re-`begin()`s
+  `SerialImu` at the new rate immediately after sending — otherwise the board would lose
+  contact with the IMU the instant it applied the change (`TM171setup()` always re-begins at
+  a fixed 115200 bps, which would then mismatch).
+- The page never auto-refreshes and issues a Request/reload manually (`POST /imu/read`) rather
+  than faking a synchronous read across the UART round-trip — same reasoning as the Terminal
+  page: an honest async fetch-then-reload beats a fragile attempt to block the HTTP response on
+  a serial reply that might not come back in time.
+
+### Raw TCP<->UART bridge — tried, scrapped
+
+A raw TCP<->UART passthrough (so a vendor IMU config tool needing a real COM port could reach
+Serial7/TM171 via a Windows virtual COM port bridged over TCP) was implemented and then
+deliberately removed in favor of driving the IMU's config protocol directly from this
+firmware instead (see the wasless/TM171 architecture notes above) — no point maintaining a
+whole bridge subsystem if the actual parameter set can just be sent over the wire ourselves.
+Worth knowing if this idea comes up again, so it isn't rediscovered the hard way:
+
+- The board only has **8 total sockets** (`MAX_SOCK_NUM` in `NativeEthernet.h` for Teensy
+  4.1 — TCP and UDP share the same pool). 4 are already permanently committed at boot
+  (`Eth_udpPAOGI`, `Eth_udpNtrip`, `Eth_udpAutoSteer`, the web server's listener), leaving only
+  4 free — not enough headroom to run one permanently-open listener per UART given how much
+  socket-pressure trouble this stack has already caused this session at far lighter load.
+- This vendored `NativeEthernetServer` has no public `end()`/`stop()`/close — once `begin()`
+  claims a socket for LISTEN, there's no documented way to release it from application code.
+  Any future "pick which port to bridge" UI would need a reboot to switch, same as `/saveboard`.
+- On the Windows tooling side (separate from the above, but also worth remembering): com0com's
+  signed driver still hit Code 52 (signature verification failure) on this machine, and Secure
+  Boot blocked the standard `bcdedit /set testsigning on` fix. com2tcp itself only ships as
+  source on SourceForge (compiles fine with MSVC's `cl.exe`, nothing exotic) — a third-party
+  site was found selling a precompiled installer for this GPL tool that turned out to be an
+  empty, non-functional repackage. A separate "Windows 11 signature patch" advertised on that
+  same third-party site was not recognized or endorsed by com0com's actual upstream maintainer
+  and had unexplained signing provenance — don't install it.
 
 **A remote script cannot reliably capture the very start of a boot log.** The Teensy's USB
 serial re-enumerates across any reset or reflash, and `Serial.print` over USB silently drops

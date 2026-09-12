@@ -320,6 +320,12 @@ static void sendHead(EthernetClient& c, const char* title, bool autoRefresh)
   c.println(".emarow input[type=range]{flex:2;accent-color:#7b7be0}");
   c.println(".emaval{font-size:.9em;font-weight:bold;color:#a0a0f0;min-width:36px;text-align:right}");
   c.println(".emabadge{font-size:.7em;padding:2px 7px;border-radius:10px;margin-left:4px}");
+  c.println(".ioblock{background:#16213e;border:1px solid #223262;border-radius:8px;padding:12px 14px;margin-bottom:14px}");
+  c.println(".iotitle{font-size:.82em;color:#7d9dff;font-weight:bold;margin-bottom:10px;letter-spacing:.04em}");
+  c.println(".iogrid{display:grid;grid-template-columns:1fr 1fr;gap:8px}");
+  c.println(".iocard{background:#0f1730;border-radius:6px;padding:8px 10px}");
+  c.println(".iolbl{display:block;font-size:.72em;color:#7a8ab0;margin-bottom:3px;white-space:nowrap}");
+  c.println(".ioval{display:block;font-size:1.3em;font-weight:bold;color:#eee;line-height:1.2}");
   c.println(".off{background:#333;color:#777}.on{background:#2a2a6a;color:#a0a0f0}");
   c.println(".nav{display:flex;gap:8px;margin-bottom:14px}");
   c.println(".nav a{flex:1;text-align:center;padding:9px;border-radius:6px;text-decoration:none;font-size:.88em;color:#bbb;background:#16213e}");
@@ -332,7 +338,7 @@ static void sendHead(EthernetClient& c, const char* title, bool autoRefresh)
   c.println("<h1>&#9881; AgOpenGPS Board Config</h1>");
 }
 
-// 0 = Status, 1 = Board, 2 = Wasless, 3 = OTA, 4 = Terminal
+// 0 = Status, 1 = Board, 2 = Wasless, 3 = OTA, 4 = Terminal, 5 = IMU
 static void sendNav(EthernetClient& c, uint8_t activeTab)
 {
   c.print("<div class='nav'>");
@@ -341,6 +347,7 @@ static void sendNav(EthernetClient& c, uint8_t activeTab)
   c.print("<a href='/wasless'");  if (activeTab == 2) c.print(" class='active'"); c.print(">&#127919; Wasless</a>");
   c.print("<a href='/ota'");      if (activeTab == 3) c.print(" class='active'"); c.print(">&#128228; OTA</a>");
   c.print("<a href='/terminal'"); if (activeTab == 4) c.print(" class='active'"); c.print(">&#128187; Term</a>");
+  c.print("<a href='/imu'");      if (activeTab == 5) c.print(" class='active'"); c.print(">&#129504; IMU</a>");
   c.println("</div>");
 }
 
@@ -351,31 +358,150 @@ static bool waslessActive()
 }
 
 // -----------------------------------------------------------------
-// Status page - auto-refreshes every 4s, no inputs, nothing to lose on a reload.
+// Status page - display-only, nothing to lose on a refresh, so it polls its own small JSON
+// endpoint (/status/data) every 400ms and patches values in place - far more reactive than a
+// full-page <meta refresh> (was every 4s; a quick button press could sit unreflected on
+// screen for most of that window even though the firmware itself reacted immediately) and
+// without the flicker/scroll-reset a full reload causes.
 // -----------------------------------------------------------------
+static void sendStatusData(EthernetClient& c)
+{
+  bool wasless = waslessActive();
+  float zeroDeg = (keyaTicksPerDeg > 0.0f) ? ((float)keyaZeroTicks / keyaTicksPerDeg) : 0.0f;
+  float azPct = constrain((azCorrAccum + 1.0f) / 2.0f, 0.0f, 1.0f) * 100.0f;
+
+  const char* imu = "none";
+  if      (useTM171)   imu = "TM171";
+  else if (useBNO08x)  imu = "BNO08x";
+  else if (useCMPS)    imu = "CMPS14";
+
+  sendOK(c, "application/json");
+  c.print("{\"was\":");     c.print(steerAngleActual, 2);
+  c.print(",\"spd\":");     c.print(gpsSpeed, 1);
+  c.print(",\"hdg\":");     c.print(emaGpsHdg / 10.0f, 1);
+  c.print(",\"zero\":");    c.print(wasZeroDone ? 1 : 0);
+  c.print(",\"imu\":\"");   c.print(imu); c.print("\"");
+  c.print(",\"wasless\":"); c.print(wasless ? 1 : 0);
+  c.print(",\"wasraw\":");  c.print(wasless ? 0 : wasRawCounts);
+  c.print(",\"steer\":");   c.print(digitalRead(STEERSW_PIN) ? 1 : 0);
+  c.print(",\"eng\":");     c.print(steerSwitch == 0 ? 1 : 0);
+  c.print(",\"work\":");    c.print(digitalRead(WORKSW_PIN) ? 1 : 0);
+  c.print(",\"rem\":");     c.print(digitalRead(REMOTE_PIN) ? 1 : 0);
+  c.print(",\"sens\":");    c.print(sensorReading, 1);
+  c.print(",\"sensraw\":"); c.print(sensorSample, 0);
+  c.print(",\"azzero\":");  c.print(zeroDeg, 2);
+  c.print(",\"azticks\":"); c.print(keyaZeroTicks);
+  c.print(",\"azcorr\":");  c.print(azCorrAccum, 3);
+  c.print(",\"azwarn\":");  c.print(fabsf(azCorrAccum) > 0.3f ? 1 : 0);
+  c.print(",\"azpct\":");   c.print(azPct, 0);
+
+  // ---- Motor output (see the Motor Output card / pin-role note on the status page) ----
+  const char* drv = (steerConfig.SteerDriverType == STEER_DRIVER_KEYA) ? "Keya"
+                     : (steerConfig.CytronDriver ? "Cytron" : "IBT2");
+  c.print(",\"drv\":\"");   c.print(drv); c.print("\"");
+  c.print(",\"pwm\":");     c.print(pwmDisplay);
+  c.print(",\"dir\":");     c.print(motorDir > 0 ? 1 : 0);
+  c.print(",\"lock\":");    c.print(digitalRead(PWM2_RPWM) ? 1 : 0);
+  c.print(",\"dirpin\":");  c.print(digitalRead(DIR1_RL_ENABLE) ? 1 : 0);
+  c.println("}");
+}
+
 static void sendStatusPage(EthernetClient& c)
 {
   sendOK(c, "text/html");
-  sendHead(c, "AgOpenGPS Board Status", true);
+  sendHead(c, "AgOpenGPS Board Status", false);
   sendNav(c, 0);
 
   // ---- LIVE STATUS ----
   c.print("<div class='status'>");
-  c.print("&#127973; WAS angle: <b>"); c.print(steerAngleActual, 2); c.print(" deg</b> &nbsp; ");
-  c.print("&#128663; Speed: <b>"); c.print(gpsSpeed, 1); c.print(" km/h</b><br>");
-  c.print("&#127748; Filtered GPS heading: <b>"); c.print(emaGpsHdg / 10.0f, 1); c.print(" deg</b> &nbsp; ");
-  c.print("Zero established: ");
+  c.print("&#127973; WAS angle: <b id='s_was'>"); c.print(steerAngleActual, 2); c.print(" deg</b> &nbsp; ");
+  c.print("&#128663; Speed: <b id='s_spd'>"); c.print(gpsSpeed, 1); c.print(" km/h</b><br>");
+  c.print("&#127748; Filtered GPS heading: <b id='s_hdg'>"); c.print(emaGpsHdg / 10.0f, 1); c.print(" deg</b> &nbsp; ");
+  c.print("Zero established: <span id='s_zero'>");
   if (wasZeroDone) c.print("<span class='ok'>&#10003; YES</span>");
   else             c.print("<span class='nok'>&#10007; NO</span>");
-  c.print("<br>&#129504; IMU detected: <b>");
+  c.print("</span><br>&#129504; IMU detected: <b id='s_imu'>");
   if (useTM171)       c.print("TM171");
   else if (useBNO08x) c.print("BNO08x");
   else if (useCMPS)   c.print("CMPS14");
   else                c.print("<span class='nok'>none</span>");
-  c.print("</b> &nbsp; &#128295; Wasless: ");
+  c.print("</b> &nbsp; &#128295; Wasless: <span id='s_wasless'>");
   if (waslessActive()) c.print("<span class='ok'>&#10003; ACTIVE</span>");
   else                 c.print("<span class='nok'>inactive</span>");
-  c.println("</div>");
+  c.println("</span></div>");
+
+  // ---- RAW INPUTS ----
+  {
+    bool wasless = waslessActive();
+
+    c.print("<div class='ioblock'>");
+    c.println("<div class='iotitle'>&#128268; Raw Inputs</div>");
+    c.println("<div class='iogrid'>");
+
+    c.print("<div class='iocard'><span class='iolbl'>WAS pot (ADS1115)</span><span class='ioval' id='s_wasraw'>");
+    if (wasless) c.print("n/a (wasless)");
+    else         { c.print(wasRawCounts); c.print(" counts"); }
+    c.println("</span></div>");
+
+    c.print("<div class='iocard'><span class='iolbl'>Steer button (pin "); c.print(STEERSW_PIN);
+    c.print(")</span><span class='ioval' id='s_steer'>"); c.print(digitalRead(STEERSW_PIN) ? "HIGH" : "LOW");
+    c.print(" &nbsp; <span style='font-size:.6em;color:#7a8ab0' id='s_eng'>engaged: "); c.print(steerSwitch == 0 ? "YES" : "no");
+    c.println("</span></span></div>");
+
+    c.print("<div class='iocard'><span class='iolbl'>Work switch (pin "); c.print(WORKSW_PIN);
+    c.print(")</span><span class='ioval' id='s_work'>"); c.print(digitalRead(WORKSW_PIN) ? "HIGH" : "LOW");
+    c.println("</span></div>");
+
+    c.print("<div class='iocard'><span class='iolbl'>Remote/auto-steer switch (pin "); c.print(REMOTE_PIN);
+    c.print(")</span><span class='ioval' id='s_rem'>"); c.print(digitalRead(REMOTE_PIN) ? "HIGH" : "LOW");
+    c.println("</span></div>");
+
+    c.print("<div class='iocard'><span class='iolbl'>Kickout/current sensor");
+    if (!steerConfig.PressureSensor && !steerConfig.CurrentSensor) c.print(" (disabled)");
+    c.print("</span><span class='ioval' id='s_sens'>"); c.print(sensorReading, 1); c.print(" / raw "); c.print(sensorSample, 0);
+    c.println("</span></div>");
+
+    c.println("</div>");
+    c.print("<div class='desc' style='color:#7a8ab0;font-size:.72em;margin-top:8px'>");
+    c.print("WAS raw counts: ~0 to 6800 in single-input mode (0-5V), ~-6800 to +6800 in differential mode. ");
+    c.print("Kickout/current sensor share the same reading - whichever of PressureSensor/CurrentSensor is enabled in AgOpenGPS's steer settings is what's shown.");
+    c.println("</div>");
+    c.println("</div>");
+  }
+
+  // ---- MOTOR OUTPUT ----
+  {
+    const char* drv = (steerConfig.SteerDriverType == STEER_DRIVER_KEYA) ? "Keya"
+                       : (steerConfig.CytronDriver ? "Cytron" : "IBT2");
+
+    c.print("<div class='ioblock'>");
+    c.print("<div class='iotitle'>&#9889; Motor Output ("); c.print(drv); c.println(")</div>");
+    c.println("<div class='iogrid'>");
+
+    c.print("<div class='iocard'><span class='iolbl'>PWM value</span><span class='ioval' id='s_pwm'>");
+    c.print(pwmDisplay); c.println(" / 255</span></div>");
+
+    c.print("<div class='iocard'><span class='iolbl'>Direction</span><span class='ioval' id='s_dir'>");
+    c.print(motorDir > 0 ? "Forward" : "Reverse"); c.println("</span></div>");
+
+    c.print("<div class='iocard'><span class='iolbl'>Lock/enable, PWM2_RPWM (pin "); c.print(PWM2_RPWM);
+    c.print(")</span><span class='ioval' id='s_lock'>"); c.print(digitalRead(PWM2_RPWM) ? "HIGH" : "LOW");
+    c.println("</span></div>");
+
+    c.print("<div class='iocard'><span class='iolbl'>DIR1_RL_ENABLE (pin "); c.print(DIR1_RL_ENABLE);
+    c.print(")</span><span class='ioval' id='s_dirpin'>"); c.print(digitalRead(DIR1_RL_ENABLE) ? "HIGH" : "LOW");
+    c.println("</span></div>");
+
+    c.println("</div>");
+    c.print("<div class='desc' style='color:#7a8ab0;font-size:.72em;margin-top:8px'>");
+    c.print("Pin roles depend on driver type. Cytron: PWM1_LPWM carries PWM+direction together, "
+            "DIR1_RL_ENABLE is the direction pin, PWM2_RPWM is the enable/lock line (also drives the "
+            "steer-button LED backlight - see CLAUDE.md). IBT2: PWM1_LPWM/PWM2_RPWM are the forward/"
+            "reverse PWM channels, DIR1_RL_ENABLE enables both H-bridge halves at once. Keya: none of "
+            "these pins are used - the PWM value and direction shown are the command sent over CAN.");
+    c.println("</div>");
+    c.println("</div>");
+  }
 
   // ---- AUTO-ZERO TRACKING ----
   {
@@ -387,34 +513,71 @@ static void sendStatusPage(EthernetClient& c)
 
     c.print("<div class='azcard'>");
     c.print("<span class='azlbl'>Current WAS angle</span>");
-    c.print("<span class='azval big'>"); c.print(steerAngleActual, 2); c.print(" deg</span>");
+    c.print("<span class='azval big' id='s_azangle'>"); c.print(steerAngleActual, 2); c.print(" deg</span>");
     c.println("</div>");
 
     c.print("<div class='azcard'>");
     c.print("<span class='azlbl'>WAS offset (zero)</span>");
-    c.print("<span class='azval'>"); c.print(zeroDeg, 2); c.print(" deg</span>");
+    c.print("<span class='azval' id='s_azzero'>"); c.print(zeroDeg, 2); c.print(" deg</span>");
     c.println("</div>");
 
     c.print("<div class='azcard'>");
     c.print("<span class='azlbl'>Encoder zero (ticks)</span>");
-    c.print("<span class='azval'>"); c.print(keyaZeroTicks); c.println("</span></div>");
+    c.print("<span class='azval' id='s_azticks'>"); c.print(keyaZeroTicks); c.println("</span></div>");
 
     c.print("<div class='azcard'>");
     c.print("<span class='azlbl'>Accumulated correction</span>");
-    c.print("<span class='azval");
-    if (fabsf(azCorrAccum) > 0.3f) c.print(" azwarn");
-    c.print("'>"); c.print(azCorrAccum, 3); c.println(" tk</span></div>");
+    c.print("<span class='azval' id='s_azcorr'");
+    if (fabsf(azCorrAccum) > 0.3f) c.print(" style='color:#f0a030'");
+    c.print(">"); c.print(azCorrAccum, 3); c.println(" tk</span></div>");
 
     c.println("</div>");
 
     {
       float pct = constrain((azCorrAccum + 1.0f) / 2.0f, 0.0f, 1.0f) * 100.0f;
-      c.print("<div class='azbar'><div class='azfill' style='width:");
+      c.print("<div class='azbar'><div class='azfill' id='s_azbar' style='width:");
       c.print(pct, 0); c.println("%'></div></div>");
     }
 
     c.println("</div>");
   }
+
+  c.println("<script>");
+  c.println("async function poll() {");
+  c.println("  try {");
+  c.println("    const j = await (await fetch('/status/data')).json();");
+  c.println("    document.getElementById('s_was').textContent = j.was.toFixed(2) + ' deg';");
+  c.println("    document.getElementById('s_spd').textContent = j.spd.toFixed(1) + ' km/h';");
+  c.println("    document.getElementById('s_hdg').textContent = j.hdg.toFixed(1) + ' deg';");
+  c.println("    document.getElementById('s_zero').innerHTML = j.zero ? \"<span class='ok'>&#10003; YES</span>\" : \"<span class='nok'>&#10007; NO</span>\";");
+  c.println("    document.getElementById('s_imu').innerHTML = (j.imu === 'none') ? \"<span class='nok'>none</span>\" : j.imu;");
+  c.println("    document.getElementById('s_wasless').innerHTML = j.wasless ? \"<span class='ok'>&#10003; ACTIVE</span>\" : \"<span class='nok'>inactive</span>\";");
+  c.println("    document.getElementById('s_wasraw').textContent = j.wasless ? 'n/a (wasless)' : (j.wasraw + ' counts');");
+  c.println("    document.getElementById('s_steer').firstChild.textContent = j.steer ? 'HIGH' : 'LOW';");
+  c.println("    document.getElementById('s_eng').textContent = 'engaged: ' + (j.eng ? 'YES' : 'no');");
+  c.println("    document.getElementById('s_work').textContent = j.work ? 'HIGH' : 'LOW';");
+  c.println("    document.getElementById('s_rem').textContent = j.rem ? 'HIGH' : 'LOW';");
+  c.println("    document.getElementById('s_sens').textContent = j.sens.toFixed(1) + ' / raw ' + j.sensraw.toFixed(0);");
+  c.println("    document.getElementById('s_pwm').textContent = j.pwm + ' / 255';");
+  c.println("    document.getElementById('s_dir').textContent = j.dir ? 'Forward' : 'Reverse';");
+  c.println("    document.getElementById('s_lock').textContent = j.lock ? 'HIGH' : 'LOW';");
+  c.println("    document.getElementById('s_dirpin').textContent = j.dirpin ? 'HIGH' : 'LOW';");
+  c.println("    document.getElementById('s_azangle').textContent = j.was.toFixed(2) + ' deg';");
+  c.println("    document.getElementById('s_azzero').textContent = j.azzero.toFixed(2) + ' deg';");
+  c.println("    document.getElementById('s_azticks').textContent = j.azticks;");
+  c.println("    const azc = document.getElementById('s_azcorr');");
+  c.println("    azc.textContent = j.azcorr.toFixed(3) + ' tk'; azc.style.color = j.azwarn ? '#f0a030' : '';");
+  c.println("    document.getElementById('s_azbar').style.width = j.azpct + '%';");
+  c.println("  } catch (e) {}");
+  c.println("  setTimeout(poll, 400);");
+  c.println("}");
+  c.println("poll();");
+  c.println("</script>");
+
+  // Compile timestamp, not a hand-maintained version number - differs automatically between
+  // any two builds, which is exactly what's needed to confirm an OTA update actually replaced
+  // the running code (vs. just rebooted), without relying on capturing a USB boot log.
+  c.print("<div class='foot'>Build: "); c.print(__DATE__); c.print(" "); c.print(__TIME__); c.println("</div>");
 
   c.println("</body></html>");
 }
@@ -776,6 +939,12 @@ void webConfigLoop()
   } else if (isPost && requestLine.indexOf("/savewasless") >= 0 && body.length() > 0) {
     handleWaslessPost(body);
     sendRedirect(client, "/wasless");
+  } else if (isPost && requestLine.indexOf("/imu/read") >= 0) {
+    tm171RequestSettings();
+    sendRedirect(client, "/imu");
+  } else if (isPost && requestLine.indexOf("/savesettings") >= 0 && body.length() > 0) {
+    handleImuSave(body);
+    sendRedirect(client, "/imu");
   } else if (isPost && requestLine.indexOf("/terminal/send") >= 0 && body.length() > 0) {
     handleTerminalSend(body);
     sendOK(client, "text/plain"); client.print("ok");
@@ -785,8 +954,12 @@ void webConfigLoop()
   } else if (requestLine.indexOf("/terminal/data") >= 0) {
     String qs = termQueryString(requestLine);
     sendTerminalData(client, (uint8_t)extractFloat(qs, "port", 0), (uint32_t)extractFloat(qs, "since", 0));
+  } else if (requestLine.indexOf("/status/data") >= 0) {
+    sendStatusData(client);
   } else if (requestLine.indexOf("/terminal") >= 0) {
     sendTerminalPage(client);
+  } else if (requestLine.indexOf("/imu") >= 0) {
+    sendImuPage(client);
   } else if (requestLine.indexOf("/ota") >= 0) {
     sendOtaPage(client);
   } else if (requestLine.indexOf("/wasless") >= 0) {
@@ -797,6 +970,15 @@ void webConfigLoop()
     sendStatusPage(client);
   }
 
+  // Do NOT call client.flush() here - NativeEthernetClient::flush() (this vendored library,
+  // NativeEthernetClient.cpp:281) is a `while (sockindex < Ethernet.socket_num) { ... }` loop
+  // that never mutates sockindex or advances the socket - the ONLY way out is one of its two
+  // internal `return`s. If the socket is ESTABLISHED and its send buffer isn't fully drained
+  // (exactly the case right after writing a multi-KB response, like /terminal/data), this
+  // spins forever: draining that buffer requires processing an incoming ACK, which requires
+  // the very main loop() this call is blocking to keep running. This is a real deadlock in
+  // the library, not a PHY/hardware issue - confirmed to be the cause of the "board needs a
+  // power cycle to recover" pattern seen throughout this session once this call was added.
   delay(1);
   client.stop();
 

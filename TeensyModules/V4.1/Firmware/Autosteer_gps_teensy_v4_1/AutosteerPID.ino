@@ -53,6 +53,8 @@ void calcSteeringPID(void)
 
 void motorDrive(void)
 {
+  motorDir = (pwmDrive >= 0) ? 1 : -1;
+
   if (steerConfig.SteerDriverType == STEER_DRIVER_KEYA)
   {
     if (pwmDrive == 0) disableKeyaSteer();

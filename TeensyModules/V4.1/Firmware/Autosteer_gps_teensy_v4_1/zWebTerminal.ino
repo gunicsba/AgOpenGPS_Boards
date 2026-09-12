@@ -96,6 +96,18 @@ static const char *termLabelForSelector(uint8_t sel)
   }
 }
 
+// Identifies which physical Serial a role pointer (SerialGPS/SerialGPS2/SerialImu) currently
+// resolves to - shown on the terminal page so "GPS is on Serial2 but nothing shows up" can be
+// told apart from "GPS actually ended up on a different physical port than expected".
+static const char *termIdentifyPhysicalPort(HardwareSerial *port)
+{
+  if (port == &Serial2) return "Serial2";
+  if (port == &Serial3) return "Serial3";
+  if (port == &Serial5) return "Serial5";
+  if (port == &Serial7) return "Serial7";
+  return "none";
+}
+
 // Describes what this port is currently doing, for display next to its name in the picker.
 static String termCurrentRoleDescription(HardwareSerial *port)
 {
@@ -169,7 +181,13 @@ static void sendTerminalData(EthernetClient &c, uint8_t sel, uint32_t since)
   else if (total - since > TERM_BUF_SIZE) start = total - TERM_BUF_SIZE; // client fell behind, buffer already wrapped
   else                                     start = since;
 
-  const uint32_t MAX_PER_POLL = 1024; // cap response size regardless of how far behind
+  // Cap well under FNET_SOCKET_DEFAULT_SIZE (2048 bytes, NativeEthernet.h) - the old 1024-byte
+  // cap produced up to 2048 hex chars alone, before the JSON wrapper, which could fill or
+  // exceed the socket's entire TX buffer in one response. Once full, further writes either
+  // stall (waiting on the client to ACK and free space - the client is waiting on us, so nothing
+  // moves) or get silently dropped, truncating the body with no error on the client's fetch()
+  // reading it. Falling behind a full poll just means the rest arrives on the next one.
+  const uint32_t MAX_PER_POLL = 384;
   if (total - start > MAX_PER_POLL) start = total - MAX_PER_POLL;
 
   c.print("{\"hex\":\"");
@@ -222,6 +240,18 @@ static void sendTerminalPage(EthernetClient &c)
              "protocol is supposed to be running on it.");
   c.println("</div>");
 
+  c.println("<div class='desc' style='background:#111;color:#9ab;padding:8px;border-radius:6px;"
+             "margin-bottom:10px;font-family:monospace;font-size:.75em;line-height:1.6'>");
+  c.print("SerialGPS -&gt; "); c.print(termIdentifyPhysicalPort(SerialGPS));
+  c.print(" &nbsp;|&nbsp; SerialGPS2 -&gt; "); c.print(termIdentifyPhysicalPort(SerialGPS2));
+  c.print(" &nbsp;|&nbsp; SerialImu -&gt; "); c.print(termIdentifyPhysicalPort(SerialImu));
+  c.println(useTM171 ? " (TM171 active)<br>" : " (TM171 inactive)<br>");
+  c.print("Bytes tapped so far - Serial2: "); c.print(termBufSerial2.totalBytes);
+  c.print(" &nbsp;|&nbsp; Serial3(RTK): "); c.print(termBufSerial3.totalBytes);
+  c.print(" &nbsp;|&nbsp; Serial5: "); c.print(termBufSerial5.totalBytes);
+  c.print(" &nbsp;|&nbsp; Serial7: "); c.println(termBufSerial7.totalBytes);
+  c.println("</div>");
+
   c.println("<div class='row'><label>Port</label><select id='termPort' style='width:220px'>");
   for (uint8_t sel = 1; sel <= 4; sel++)
   {
@@ -244,7 +274,13 @@ static void sendTerminalPage(EthernetClient &c)
   c.println("</select> <button id='applyBaud' style='width:auto;padding:6px 12px;margin-top:0'>Apply</button></div>");
   c.println("<div class='desc' style='color:#f0a030'>Changing baud rate disrupts normal use of this port until it's changed back or the board reboots.</div>");
 
-  c.println("<pre id='termView' style='background:#0d1117;color:#7ee787;padding:10px;border-radius:6px;height:280px;overflow-y:auto;font-size:.78em;white-space:pre-wrap;word-break:break-all;margin-top:10px'></pre>");
+  c.println("<div class='row' style='margin-top:10px;gap:16px'>");
+  c.println("<label style='display:flex;align-items:center;gap:6px;font-size:.82em;color:#bbb'>"
+             "<input type='checkbox' id='termAutoscroll' checked style='width:auto'> autoscroll</label>");
+  c.println("<label style='display:flex;align-items:center;gap:6px;font-size:.82em;color:#bbb'>"
+             "<input type='checkbox' id='termPause' style='width:auto'> pause (freeze view)</label>");
+  c.println("</div>");
+  c.println("<pre id='termView' style='background:#0d1117;color:#7ee787;padding:10px;border-radius:6px;height:280px;overflow-y:auto;font-size:.78em;white-space:pre-wrap;word-break:break-all;margin-top:6px'></pre>");
 
   c.println("<div class='row' style='margin-top:10px'>");
   c.println("<input type='text' id='termSendText' placeholder='text to send' style='flex:1;padding:8px;background:#16213e;color:#eee;border:1px solid #0f3460;border-radius:4px'>");
@@ -259,20 +295,32 @@ static void sendTerminalPage(EthernetClient &c)
   c.println("function hexToBytes(h) { const a=[]; for (let i=0;i<h.length;i+=2) a.push(parseInt(h.substr(i,2),16)); return a; }");
   c.println("function render(bytes) {");
   c.println("  let s = '';");
-  c.println("  for (const b of bytes) s += (b>=32 && b<127) ? String.fromCharCode(b) : (b===10?'\\n':(b===13?'':'.'));");
+  // CR (13) is kept as a literal \r, not dropped - preserves the raw CRLF line ending
+  // instead of collapsing it to a single \n, so malformed/missing line endings are visible too.
+  c.println("  for (const b of bytes) s += (b>=32 && b<127) ? String.fromCharCode(b) : (b===10?'\\n':(b===13?'\\r':'.'));");
   c.println("  view.textContent += s;");
   c.println("  if (view.textContent.length > 20000) view.textContent = view.textContent.slice(-20000);");
-  c.println("  view.scrollTop = view.scrollHeight;");
+  c.println("  if (document.getElementById('termAutoscroll').checked) view.scrollTop = view.scrollHeight;");
   c.println("}");
   c.println("async function poll() {");
+  c.println("  if (document.getElementById('termPause').checked) { setTimeout(poll, 2500); return; }");
   c.println("  const port = document.getElementById('termPort').value;");
   c.println("  try {");
   c.println("    const resp = await fetch(`/terminal/data?port=${port}&since=${since}`);");
-  c.println("    const j = await resp.json();");
+  c.println("    const text = await resp.text();");
+  c.println("    let j;");
+  c.println("    try { j = JSON.parse(text); }");
+  c.println("    catch (parseErr) { throw new Error(`bad JSON (${text.length} bytes): ${text.slice(0,80)}`); }");
   c.println("    since = j.next;");
   c.println("    if (j.hex) render(hexToBytes(j.hex));");
-  c.println("  } catch (e) {}");
-  c.println("  setTimeout(poll, 500);");
+  c.println("  } catch (e) {");
+  c.println("    view.textContent += `\\n[poll error: ${e.message || e}]\\n`;");
+  c.println("    view.scrollTop = view.scrollHeight;");
+  c.println("  }");
+  // 2.5s, not 500ms: this board's TCP stack is fragile under rapid connect/close churn - a
+  // fresh connection every poll at 500ms exhausts its small socket pool within seconds (the
+  // Status page's 4s auto-refresh never showed this; the terminal's much higher rate did).
+  c.println("  setTimeout(poll, 2500);");
   c.println("}");
   c.println("document.getElementById('termPort').addEventListener('change', () => { since = 0; view.textContent = ''; });");
   c.println("document.getElementById('applyBaud').addEventListener('click', async () => {");

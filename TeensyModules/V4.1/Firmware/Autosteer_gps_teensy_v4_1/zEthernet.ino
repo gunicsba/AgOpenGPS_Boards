@@ -71,5 +71,6 @@ void EthernetStart()
     Serial.print("Ethernet AutoSteer UDP listening to & send from port: ");
     Serial.println(AOGAutoSteerPort);
   }
+
  #endif
 }

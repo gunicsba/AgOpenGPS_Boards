@@ -137,6 +137,11 @@ void TM171process() {
 #endif
         break;
         
+        case 21: // Setting Object (response to a Request, or an unsolicited echo) - see
+                 // zWebImu.ino for the read/write UI and the field layout reference.
+          tm171HandleSettingObject(&ImuData[7], ImuData[2] >= 4 ? ImuData[2] - 4 : 0);
+        break;
+
         case 22: // Status Output
           TemperatureV.fBytes[0] = ImuData[11];
           TemperatureV.fBytes[1] = ImuData[12];

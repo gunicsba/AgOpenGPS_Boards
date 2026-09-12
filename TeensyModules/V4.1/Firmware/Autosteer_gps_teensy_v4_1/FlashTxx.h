@@ -63,7 +63,14 @@
   #define FLASH_SIZE		(0x800000)		// 8MB
   #define FLASH_SECTOR_SIZE	(0x1000)		// 4KB sector size
   #define FLASH_WRITE_SIZE	(4)			// 4-byte/32-bit writes
-  #define FLASH_RESERVE		(4*FLASH_SECTOR_SIZE)	// reserve top of flash
+  // Upstream FlasherX default is 4 sectors (16KB). This sketch uses EEPROM.h, whose emulation
+  // on Teensy 4.x reserves the top 256KB of flash for wear-leveling - with only 16KB excluded,
+  // firmware_buffer_init()'s scan-for-the-first-non-erased-byte heuristic (FlashTxx.c) runs
+  // straight into that EEPROM region's real (non-erased) data and reports a tiny/invalid
+  // staging buffer. 0x40 sectors = 256KB matches the EEPROM reservation exactly - confirmed
+  // against a community report of this exact fix (PJRC forum, "OTA through Ethernet with
+  // Teensy 4.1"). Do not shrink this back down while EEPROM.h is in use.
+  #define FLASH_RESERVE		(0x40*FLASH_SECTOR_SIZE)	// reserve top of flash - EEPROM emulation
   #define FLASH_BASE_ADDR	(0x60000000)		// code starts here
 #elif defined(__IMXRT1062__) && defined(ARDUINO_TEENSY_MICROMOD)
   #define FLASH_ID		"fw_teensyMM"		// target ID (in code)
@@ -77,6 +84,13 @@
 #endif
 
 #if defined(FLASH_ID)
+  // RAM-based staging (RAM_BUFFER_SIZE > 0) was tried and confirmed infeasible on this build:
+  // actual free heap at runtime measured only ~3.3KB (via mallinfo(), see the OTA page's
+  // diagnostic), immediately after a fresh boot - nowhere close to the compiler's static
+  // "free for malloc/new" estimate (~500KB), which doesn't account for NativeEthernet's own
+  // runtime-allocated buffers. Flash-based staging (this stays at upstream's default of 0) is
+  // the working approach here - see the FLASH_RESERVE comment above for the actual bug that
+  // was blocking it.
   #define RAM_BUFFER_SIZE	(0 * 1024)
   #define IN_FLASH(a) ((a) >= FLASH_BASE_ADDR && (a) < FLASH_BASE_ADDR+FLASH_SIZE)
 #endif
