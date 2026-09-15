@@ -43,10 +43,15 @@
 //Define sensor pin for current or pressure sensor
 #define CURRENT_SENSOR_PIN A17
 #define PRESSURE_SENSOR_PIN A10
-#define JOHNDEERE false
+#define JOHNDEERE true
 elapsedMicros dutyTime = 0;
-float dutyTimeCurrent = 0;
+volatile float dutyTimeCurrent = 0;
 float dutyTimePrev = 0;
+
+//Consecutive over-threshold loop passes required before FEMA sensor triggers a disengage
+//(filters a single-sample noise/EMI glitch from tripping autosteer off)
+#define JD_FEMA_TRIP_DEBOUNCE 2
+uint8_t jdFemaTripCount = 0;
 
 #define CONST_180_DIVIDED_BY_PI 57.2957795130823
 
@@ -184,10 +189,18 @@ void ISRJOHNDEERERISING(){
 
 void ISRJOHNDEEREFALLING(){
   attachInterrupt(digitalPinToInterrupt(PRESSURE_SENSOR_PIN), ISRJOHNDEERERISING, RISING);
+  uint32_t sample = dutyTime;
+
+  //Reject implausible pulses (EMI/wiring glitches) here, on the raw sample, before
+  //it gets blended into the smoothed average. Previously the range check only ran
+  //in the main loop on the already-smoothed value, so a single wild raw sample
+  //could still skew dutyTimeCurrent and look like a fast wheel movement.
+  if (sample <= 50 || sample >= 5000) return;
+
   if (dutyTimeCurrent == 0) {
-    dutyTimeCurrent = dutyTime;  // seed first reading, no ramp-up
+    dutyTimeCurrent = sample;  // seed first reading, no ramp-up
   } else {
-    dutyTimeCurrent = (dutyTimeCurrent * 0.95) + (dutyTime * 0.05);
+    dutyTimeCurrent = (dutyTimeCurrent * 0.95) + (sample * 0.05);
   }
   return;
 }
@@ -368,23 +381,42 @@ void autosteerLoop()
     if (steerConfig.PressureSensor)
     {
       if(JOHNDEERE){
-        if(dutyTimeCurrent > 100 && dutyTimeCurrent < 4500) 
+        if(dutyTimeCurrent > 100 && dutyTimeCurrent < 4500)
         {
           sensorSample = abs((double)dutyTimeCurrent-2600)/5; //should make it into a smoother transition around 95 to 5 percent
           sensorReading = (min(abs( ( abs((double)dutyTimePrev-2600)/5 ) - sensorSample),255) * 0.6) + (sensorReading * 0.4);
           dutyTimePrev = dutyTimeCurrent;
         }
-      } else {
-      sensorSample = (float)analogRead(PRESSURE_SENSOR_PIN);
-      sensorSample *= 0.25;
-      sensorReading = sensorReading * 0.6 + sensorSample * 0.4;
-      }
 
-      if (sensorReading >= steerConfig.PulseCountMax)
-      {
+        //Require the trip condition to persist for a couple of loop passes before
+        //disengaging - a genuine hand-on-wheel move lasts many loop cycles, a noise
+        //glitch on the raw ISR reading only shows up for one.
+        if (sensorReading >= steerConfig.PulseCountMax)
+        {
+          if (jdFemaTripCount < 255) jdFemaTripCount++;
+        }
+        else
+        {
+          jdFemaTripCount = 0;
+        }
+
+        if (jdFemaTripCount >= JD_FEMA_TRIP_DEBOUNCE)
+        {
           steerSwitch = 1; // reset values like it turned off
           currentState = 1;
           previous = 0;
+        }
+      } else {
+        sensorSample = (float)analogRead(PRESSURE_SENSOR_PIN);
+        sensorSample *= 0.25;
+        sensorReading = sensorReading * 0.6 + sensorSample * 0.4;
+
+        if (sensorReading >= steerConfig.PulseCountMax)
+        {
+            steerSwitch = 1; // reset values like it turned off
+            currentState = 1;
+            previous = 0;
+        }
       }
     }
 
