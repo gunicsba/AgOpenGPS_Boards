@@ -59,7 +59,7 @@ uint32_t baudrates[]
 
 const uint32_t nrBaudrates = sizeof(baudrates)/sizeof(baudrates[0]);
 
-int8_t KeyaCurrentSensorReading = 0;
+float KeyaCurrentSensorReading = 0; // filtered, 0-255 (amps * 20)
 
 #define ImuWire Wire        //SCL=19:A5 SDA=18:A4
 #define RAD_TO_DEG_X_10 572.95779513082320876798154814105

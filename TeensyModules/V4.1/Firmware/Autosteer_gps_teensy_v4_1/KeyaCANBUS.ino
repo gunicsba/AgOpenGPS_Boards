@@ -162,12 +162,10 @@ void KeyaBus_Receive() {
 			// TODO Yeah, if we ever see something here, fire off a disable, refuse to engage autosteer or..?
 			//KeyaCurrentSensorReading = abs((int16_t)((KeyaBusReceiveData.buf[5] << 8) | KeyaBusReceiveData.buf[4]));
 			//if (KeyaCurrentSensorReading > 255) KeyaCurrentSensorReading -= 255;
-			if (KeyaBusReceiveData.buf[4] == 0xFF) {
-				KeyaCurrentSensorReading = (0.95 * KeyaCurrentSensorReading  ) + ( 0.05 *  (256 - KeyaBusReceiveData.buf[5]) * 20);
-			}
-			else {
-				KeyaCurrentSensorReading = (0.95 * KeyaCurrentSensorReading  ) + ( 0.05 * KeyaBusReceiveData.buf[5] * 20);
-			}
+			// Manual: signed, high byte first. Float + clamp so it can't wrap (int8 wrapped above ~6A)
+			int16_t keyaCurrent = (int16_t)((KeyaBusReceiveData.buf[4] << 8) | KeyaBusReceiveData.buf[5]);
+			KeyaCurrentSensorReading = (0.95 * KeyaCurrentSensorReading) + (0.05 * abs(keyaCurrent) * 20);
+			KeyaCurrentSensorReading = min(KeyaCurrentSensorReading, 255);
 			//if (debugKeya) Serial.println("Heartbeat current is " + String(KeyaCurrentSensorReading));
 		}
 
