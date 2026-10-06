@@ -79,7 +79,7 @@ const uint16_t LOOP_TIME = 25;  //40Hz
 uint32_t autsteerLastTime = LOOP_TIME;
 uint32_t currentTime = LOOP_TIME;
 
-const uint16_t WATCHDOG_THRESHOLD = 100;
+const uint16_t WATCHDOG_THRESHOLD = 20; // 20 * 25ms = 500ms without a valid PGN 254 stops steering
 const uint16_t WATCHDOG_FORCE_VALUE = WATCHDOG_THRESHOLD + 2; // Should be greater than WATCHDOG_THRESHOLD
 uint8_t watchdogTimer = WATCHDOG_FORCE_VALUE;
 
@@ -435,6 +435,10 @@ void autosteerLoop()
           previous = 0;
       }
     }
+
+    //Steer switch off or kickout tripped - stop steering right away instead of
+    //waiting for the next PGN 254, which may never come if AgOpenGPS is frozen
+    if (steerSwitch == 1) watchdogTimer = WATCHDOG_FORCE_VALUE;
 
     remoteSwitch = digitalRead(REMOTE_PIN); //read auto steer enable switch open = 0n closed = Off
     switchByte = 0;
