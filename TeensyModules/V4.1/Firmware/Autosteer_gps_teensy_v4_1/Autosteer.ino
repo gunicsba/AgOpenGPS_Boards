@@ -45,8 +45,13 @@
 #define PRESSURE_SENSOR_PIN A10
 #define JOHNDEERE true
 elapsedMicros dutyTime = 0;
-float dutyTimeCurrent = 0;
+volatile float dutyTimeCurrent = 0;
 float dutyTimePrev = 0;
+
+//Consecutive over-threshold loop passes required before FEMA sensor triggers a disengage
+//(filters a single-sample noise/EMI glitch from tripping autosteer off)
+#define JD_FEMA_TRIP_DEBOUNCE 2
+uint8_t jdFemaTripCount = 0;
 
 #define CONST_180_DIVIDED_BY_PI 57.2957795130823
 
@@ -74,7 +79,7 @@ const uint16_t LOOP_TIME = 25;  //40Hz
 uint32_t autsteerLastTime = LOOP_TIME;
 uint32_t currentTime = LOOP_TIME;
 
-const uint16_t WATCHDOG_THRESHOLD = 100;
+const uint16_t WATCHDOG_THRESHOLD = 20; // 20 * 25ms = 500ms without a valid PGN 254 stops steering
 const uint16_t WATCHDOG_FORCE_VALUE = WATCHDOG_THRESHOLD + 2; // Should be greater than WATCHDOG_THRESHOLD
 uint8_t watchdogTimer = WATCHDOG_FORCE_VALUE;
 
@@ -93,6 +98,7 @@ int8_t PGN_250_Size = sizeof(PGN_250) - 1;
 uint8_t aog2Count = 0;
 float sensorReading;
 float sensorSample;
+elapsedMillis sensorPulseReset;
 
 elapsedMillis gpsSpeedUpdateTimer = 0;
 
@@ -182,9 +188,20 @@ void ISRJOHNDEERERISING(){
 }
 
 void ISRJOHNDEEREFALLING(){
-  if(dutyTime  < 50) return;
   attachInterrupt(digitalPinToInterrupt(PRESSURE_SENSOR_PIN), ISRJOHNDEERERISING, RISING);
-  dutyTimeCurrent = dutyTime;
+  uint32_t sample = dutyTime;
+
+  //Reject implausible pulses (EMI/wiring glitches) here, on the raw sample, before
+  //it gets blended into the smoothed average. Previously the range check only ran
+  //in the main loop on the already-smoothed value, so a single wild raw sample
+  //could still skew dutyTimeCurrent and look like a fast wheel movement.
+  if (sample <= 50 || sample >= 5000) return;
+
+  if (dutyTimeCurrent == 0) {
+    dutyTimeCurrent = sample;  // seed first reading, no ramp-up
+  } else {
+    dutyTimeCurrent = (dutyTimeCurrent * 0.95) + (sample * 0.05);
+  }
   return;
 }
 
@@ -364,42 +381,42 @@ void autosteerLoop()
     if (steerConfig.PressureSensor)
     {
       if(JOHNDEERE){
-        if(dutyTimeCurrent > 100 && dutyTimeCurrent < 4500) 
+        if(dutyTimeCurrent > 100 && dutyTimeCurrent < 4500)
         {
-//          Serial.print(" , dutyTimeCurrent: ");
-//          Serial.print(dutyTimeCurrent);
-          //current dutyTime should be between 
-          if(abs(dutyTimeCurrent - dutyTimePrev) < 1000) // if it's more than 2000 we jumped...
-          {
-            sensorSample = abs((double)dutyTimeCurrent-2600)/5; //should make it into a smoother transition around 95 to 5 percent
-//            Serial.print(" , sensorSample: ");
-//            Serial.print(sensorSample);
-           sensorReading = abs( ( abs((double)dutyTimePrev-2600)/5 ) - sensorSample);
-//            Serial.print(" , sensorReading: ");
-//            Serial.println(sensorReading);
-            sensorReading = min(sensorReading,255);
-          } else {
-            sensorReading = 0;
-//            Serial.print(" , sensorReading: ");
-//            Serial.println(sensorReading);
-          }
+          sensorSample = abs((double)dutyTimeCurrent-2600)/5; //should make it into a smoother transition around 95 to 5 percent
+          sensorReading = (min(abs( ( abs((double)dutyTimePrev-2600)/5 ) - sensorSample),255) * 0.6) + (sensorReading * 0.4);
           dutyTimePrev = dutyTimeCurrent;
-        } else {
-//          Serial.print(" , dutyTimeCurrent else: ");
-//          Serial.println(dutyTimeCurrent);
-          
         }
-      } else {
-      sensorSample = (float)analogRead(PRESSURE_SENSOR_PIN);
-      sensorSample *= 0.25;
-      sensorReading = sensorReading * 0.6 + sensorSample * 0.4;
-      }
 
-      if (sensorReading >= steerConfig.PulseCountMax)
-      {
+        //Require the trip condition to persist for a couple of loop passes before
+        //disengaging - a genuine hand-on-wheel move lasts many loop cycles, a noise
+        //glitch on the raw ISR reading only shows up for one.
+        if (sensorReading >= steerConfig.PulseCountMax)
+        {
+          if (jdFemaTripCount < 255) jdFemaTripCount++;
+        }
+        else
+        {
+          jdFemaTripCount = 0;
+        }
+
+        if (jdFemaTripCount >= JD_FEMA_TRIP_DEBOUNCE)
+        {
           steerSwitch = 1; // reset values like it turned off
           currentState = 1;
           previous = 0;
+        }
+      } else {
+        sensorSample = (float)analogRead(PRESSURE_SENSOR_PIN);
+        sensorSample *= 0.25;
+        sensorReading = sensorReading * 0.6 + sensorSample * 0.4;
+
+        if (sensorReading >= steerConfig.PulseCountMax)
+        {
+            steerSwitch = 1; // reset values like it turned off
+            currentState = 1;
+            previous = 0;
+        }
       }
     }
 
@@ -418,6 +435,10 @@ void autosteerLoop()
           previous = 0;
       }
     }
+
+    //Steer switch off or kickout tripped - stop steering right away instead of
+    //waiting for the next PGN 254, which may never come if AgOpenGPS is frozen
+    if (steerSwitch == 1) watchdogTimer = WATCHDOG_FORCE_VALUE;
 
     remoteSwitch = digitalRead(REMOTE_PIN); //read auto steer enable switch open = 0n closed = Off
     switchByte = 0;
@@ -768,7 +789,7 @@ void ReceiveUdp()
 
                 SendUdp(helloFromAutoSteer, sizeof(helloFromAutoSteer), Eth_ipDestination, portDestination);
                 }
-                if(useBNO08x || useCMPS)
+                if(useBNO08x || useCMPS || useTM171)
                 {
                  SendUdp(helloFromIMU, sizeof(helloFromIMU), Eth_ipDestination, portDestination); 
                 }
@@ -841,6 +862,9 @@ void EncoderFunc()
 {
   if (encEnable)
   {
+    //Reset counter to 0 if there wasn't any activity for 15 seconds
+    if(sensorPulseReset >= 10000 && steerConfig.PulseCountMax >= 3)  pulseCount = 0;
+    sensorPulseReset = 0;
     pulseCount++;
     encEnable = false;
   }

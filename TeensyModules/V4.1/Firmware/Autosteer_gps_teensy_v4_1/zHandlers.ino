@@ -1,10 +1,15 @@
 // Conversion to Hexidecimal
 const char* asciiHex = "0123456789ABCDEF";
 
+// KSXT message buffer
+char ksxtBuffer[256];
+bool ksxtReceived = false;
+unsigned long ksxtLastReceived = 0;  // Timestamp for timeout
+
+elapsedMillis badQOStimer;
+
 // the new PANDA sentence buffer
 char nmea[100];
-
-// GGA
 char fixTime[12];
 char latitude[15];
 char latNS[3];
@@ -29,7 +34,7 @@ char imuYawRate[6];
 // If odd characters showed up.
 void errorHandler()
 {
-  //nothing at the moment
+  // Error handler - can add debug prints here if needed
 }
 
 void GGA_Handler() //Rec'd GGA
@@ -77,7 +82,71 @@ void GGA_Handler() //Rec'd GGA
        dualReadyGGA = true;
     }
 
-    if (useBNO08x || useCMPS)
+    if (useTM171) 
+    {
+      imuTrigger = true;
+      imuTimer = 0;
+      BuildNmea();
+      dualReadyGGA = false;
+      if( !useDual)
+      {
+            digitalWrite(GPSRED_LED, HIGH);    //Turn red GPS LED ON, we have GGA and must have a IMU     
+            digitalWrite(GPSGREEN_LED, LOW);   //Make sure the Green LED is OFF    
+      }
+      if(qos >= 4){
+        digitalWrite(GPSRED_LED, LOW);
+        if(qos == 4) 
+          digitalWrite(GPSGREEN_LED, blink);
+        else 
+          digitalWrite(GPSGREEN_LED, HIGH);
+      } else if(qos >= 2){
+        digitalWrite(GPSGREEN_LED, blink);
+        digitalWrite(GPSRED_LED, !blink);
+
+
+        if (Ethernet_running && badQOStimer > 15000)   //If ethernet running send the GPS there
+        {
+          badQOStimer = 0;
+                  
+          String message = "IMU (TM171) not ready! Temp: " + String(TemperatureV.fValue) + "C  QoS: " + String(qos);
+          Serial.print("Sending Hardware message!!                  ");
+          Serial.println(message);
+
+          uint8_t hardwareMessage[128] = { 0x80, 0x81, 0x7E, 221 };
+
+          int msgLen = message.length();  // UTF-8 byte count (assuming no extended chars)
+          int totalLength = 7 + msgLen + 1; // header(7) + message + CRC(1)
+
+          hardwareMessage[4] = msgLen + 2;
+          hardwareMessage[5] = 5; //seconds to display
+          hardwareMessage[6] = 0; //color 0 or 1
+          
+          // Copy message bytes into hardwareMessage[7..]
+          message.getBytes(&hardwareMessage[7], msgLen + 1);  // +1 for null-terminator safety
+
+          //checksum
+          int16_t CK_A = 0;
+          for (uint8_t i = 2; i < 7 + msgLen; i++)
+          {
+            CK_A = (CK_A + hardwareMessage[i]);
+          }
+          hardwareMessage[7 + msgLen] = CK_A;  // CRC
+
+           Serial.println("Hardware Message Dump:");
+  for (int i = 0; i < totalLength; i++) {
+    if (i % 16 == 0) Serial.print("\n");
+    Serial.printf("%02X ", hardwareMessage[i]);
+  }
+  Serial.println("\n");
+
+          SendUdp(hardwareMessage, totalLength, Eth_ipDestination, portDestination);
+
+        }
+
+
+      }
+    }
+    else if (useBNO08x || useCMPS)
     {
        imuHandler();          //Get IMU data ready
        BuildNmea();           //Build & send data GPS data to AgIO (Both Dual & Single)
@@ -88,7 +157,7 @@ void GGA_Handler() //Rec'd GGA
         digitalWrite(GPSGREEN_LED, LOW);   //Make sure the Green LED is OFF     
        }
     }
-    else if (!useBNO08x && !useCMPS && !useDual) 
+    else if (!useBNO08x && !useCMPS && !useDual && !useTM171) 
     {
         digitalWrite(GPSRED_LED, blink);   //Flash red GPS LED, we have GGA but no IMU or dual
         digitalWrite(GPSGREEN_LED, LOW);   //Make sure the Green LED is OFF
@@ -180,7 +249,35 @@ void imuHandler()
     int16_t temp = 0;
     if (!useDual)
     {
-        if (useCMPS)
+        if (useTM171) 
+        {
+            float angVel;
+
+            // Fill rest of Panda Sentence - Heading
+            itoa(YawV.fValue*10, imuHeading, 10);
+
+
+            if (steerConfig.IsUseY_Axis)
+            {
+                // the pitch x100
+                itoa(PitchV.fValue*10, imuPitch, 10);
+
+                // the roll x100
+                itoa(RollV.fValue*10, imuRoll, 10);
+            }
+            else
+            {
+                // the pitch x100
+                itoa(RollV.fValue*10, imuPitch, 10);
+
+                // the roll x100
+                itoa(PitchV.fValue*10, imuRoll, 10);
+            }
+
+            itoa(0, imuYawRate, 10);
+            
+        }
+        else if (useCMPS)
         {
             //the heading x10
             Wire.beginTransmission(CMPS14_ADDRESS);
@@ -284,6 +381,27 @@ void imuHandler()
 
 void BuildNmea(void)
 {
+    // If KSXT message was received recently (within 1000ms), use it instead of building PANDA/PAOGI
+    if (ksxtReceived && (millis() - ksxtLastReceived < 1000)) {
+        if (!passThroughGPS && !passThroughGPS2)
+        {
+            SerialAOG.print(ksxtBuffer);  // Send KSXT via USB
+        }
+
+        if (Ethernet_running)   //If ethernet running send the KSXT via UDP
+        {
+            int len = strlen(ksxtBuffer);
+            Eth_udpPAOGI.beginPacket(Eth_ipDestination, portDestination);
+            Eth_udpPAOGI.write(ksxtBuffer, len);
+            Eth_udpPAOGI.endPacket();
+        }
+        return;
+    }
+    else {
+        // Clear the flag if it's been too long since last KSXT
+        ksxtReceived = false;
+    }
+    
     strcpy(nmea, "");
 
     if (useDual) strcat(nmea, "$PAOGI,");
@@ -476,6 +594,54 @@ void CalculateChecksum(void)
     010.2,K      Ground speed, Kilometers per hour
      48          Checksum
 */
+
+void KSXT_Handler()
+{
+  digitalWrite(GPSGREEN_LED, !digitalRead(GPSGREEN_LED)); // Toggle LED on KSXT receive
+  
+  // Get the raw KSXT sentence from the parser
+  char sentence[256];
+  parser.getType(sentence);  // Get the message type
+  
+  // Reconstruct the full sentence with all arguments
+  strcpy(ksxtBuffer, "$" );
+  strcat(ksxtBuffer, sentence);
+  
+  for(int i = 0; i < parser.argCount(); i++) {
+    strcat(ksxtBuffer, ",");
+    char arg[64];
+    parser.getArg(i, arg);
+    strcat(ksxtBuffer, arg);
+  }
+  
+  // Add checksum calculation
+  int16_t sum = 0;
+  for(unsigned int i = 1; i < strlen(ksxtBuffer); i++) {
+    sum ^= ksxtBuffer[i];
+  }
+  
+  char checksumStr[4];
+  sprintf(checksumStr, "*%02X\r\n", sum);
+  strcat(ksxtBuffer, checksumStr);
+  
+  // Forward to AgIO immediately
+  if (!passThroughGPS && !passThroughGPS2)
+  {
+      SerialAOG.print(ksxtBuffer);  // Send KSXT via USB
+  }
+
+  if (Ethernet_running)   //If ethernet running send the KSXT via UDP
+  {
+      int len = strlen(ksxtBuffer);
+      Eth_udpPAOGI.beginPacket(Eth_ipDestination, portDestination);
+      Eth_udpPAOGI.write(ksxtBuffer, len);
+      Eth_udpPAOGI.endPacket();
+  }
+  
+  // Mark that KSXT was received with timestamp
+  ksxtReceived = true;
+  ksxtLastReceived = millis();
+}
 
 void VTG_Handler()
 {
