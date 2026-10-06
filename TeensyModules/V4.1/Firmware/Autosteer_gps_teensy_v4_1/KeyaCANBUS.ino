@@ -42,7 +42,7 @@ elapsedMillis keyaHeartbeatAge;
 elapsedMillis keyaStatusTimer;
 uint32_t keyaFramesSeen = 0;
 
-const bool debugKeya = true;
+const bool debugKeya = false;
 
 void keyaSend(uint8_t data[]) {
 	//TODO Use this optimisation function once we're happy things are moving the right way
@@ -315,7 +315,7 @@ void KeyaBus_Receive() {
 		//}
 	}
 
-	if (keyaStatusTimer > 2000) {
+	if (keyaStatusTimer > 10000) {
 		keyaStatusTimer = 0;
 		if (keyaDetected) {
 			Serial.println(String(isAllynav ? "Allynav" : "Keya") + " @" + String(keyaBaudRates[keyaBaudIndex])
