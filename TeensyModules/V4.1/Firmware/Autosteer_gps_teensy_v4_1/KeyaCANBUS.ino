@@ -38,6 +38,9 @@ bool keyaDetected = false;
 bool isAllynav = false;
 uint8_t allynavLastError1 = 0;
 uint8_t allynavLastError2 = 0;
+elapsedMillis keyaHeartbeatAge;
+elapsedMillis keyaStatusTimer;
+uint32_t keyaFramesSeen = 0;
 
 const bool debugKeya = true;
 
@@ -245,6 +248,9 @@ void checkAllynavErrors(uint8_t error1, uint8_t error2) {
 void KeyaBus_Receive() {
 	CAN_message_t KeyaBusReceiveData;
 	while (Keya_Bus.read(KeyaBusReceiveData)) {
+		keyaFramesSeen++;
+		if (KeyaBusReceiveData.id == KEYA_HEARTBEAT_ID || KeyaBusReceiveData.id == ALLYNAV_HEARTBEAT_ID) keyaHeartbeatAge = 0;
+
 		if (!keyaDetected) {
 			if (KeyaBusReceiveData.id == KEYA_HEARTBEAT_ID) keyaMotorDetected(false);
 			else if (KeyaBusReceiveData.id == ALLYNAV_HEARTBEAT_ID) keyaMotorDetected(true);
@@ -307,6 +313,18 @@ void KeyaBus_Receive() {
 		//		// placeholder for more checks
 		//	}
 		//}
+	}
+
+	if (keyaStatusTimer > 2000) {
+		keyaStatusTimer = 0;
+		if (keyaDetected) {
+			Serial.println(String(isAllynav ? "Allynav" : "Keya") + " @" + String(keyaBaudRates[keyaBaudIndex])
+				+ " | frames " + String(keyaFramesSeen) + " | last heartbeat " + String((uint32_t)keyaHeartbeatAge) + "ms ago"
+				+ " | current " + String(KeyaCurrentSensorReading / 20.0, 2) + "A | pwmDrive " + String(pwmDrive));
+		}
+		else {
+			Serial.println("Keya/Allynav: no heartbeat yet, scanning (" + String(keyaFramesSeen) + " frames seen)");
+		}
 	}
 
 	// Nothing heard at this baud yet - move on to the next one
