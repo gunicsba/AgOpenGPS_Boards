@@ -2,8 +2,8 @@
    Ported from AOG_CAN_Teensy4.1, which took it from renatorgr/Boards, Firmware/v4.5_AiO_WEB/zWeb.ino and
    zEthernet.ino (written 2026 by Claude (Anthropic) for renatorgr).
    Autosteer_gps_teensy_v4_1, 2026: the pages of this firmware (status of steering, GPS / dual, IMU and hydraulics,
-   serial ports, John Deere FEMA input and remote pulse sensor, commands to the GNSS receiver, TM171 settings and
-   calibration, firmware update, restart, messages).
+   serial ports, John Deere FEMA input, remote pulse sensor, CAN bus SASA sensor and CNH engage button, commands
+   to the GNSS receiver, TM171 settings and calibration, firmware update, restart, messages).
    Answers are sent a piece at a time from loop(), only what the socket takes, so steering and the GPS keep
    running while a browser loads the page. The network stack is polled from loop() (zNet.h).
    Licence: GNU General Public License v3 or later (file COPYING), WITHOUT ANY WARRANTY.
@@ -11,7 +11,7 @@
 */
 // One request at a time, answered with "Connection: close". There is no password: anyone on the
 // module's network can open the page. What could disturb steering (serial ports and restart, FEMA input,
-// remote input, GNSS commands, IMU choice, TM171 write and calibration, firmware update) is refused while
+// remote input, CAN inputs, GNSS commands, IMU choice, TM171 write and calibration, firmware update) is refused while
 // autosteer is engaged; the firmware update and the gyro calibrations also while the tractor moves.
 
 #include <stdarg.h>
@@ -147,7 +147,7 @@ static void webSteerOff()
 static uint32_t gpsBps = 0, ntripBps = 0, radioBps = 0;
 static void webRates()
 {
-    static uint32_t ms = 0, g = 0, n = 0, r = 0;
+    static uint32_t ms = 0, g = 0, n = 0, r = 0, f = 0;
     const uint32_t now = millis();
     if (now - ms < 1000) return;
     const uint32_t dt = now - ms;
@@ -155,6 +155,7 @@ static void webRates()
     gpsBps   = (uint32_t)((uint64_t)(gpsRxBytes - g) * 1000 / dt);   g = gpsRxBytes;
     ntripBps = (uint32_t)((uint64_t)(ntripRxBytes - n) * 1000 / dt); n = ntripRxBytes;
     radioBps = (uint32_t)((uint64_t)(radioRxBytes - r) * 1000 / dt); r = radioRxBytes;
+    canFps   = (uint32_t)((uint64_t)(canFrames - f) * 1000 / dt);    f = canFrames;
 }
 
 // ---------------------------------------------------------------- answers
@@ -322,7 +323,11 @@ static void apiStatus()
     j.num("femaUs", dutyTimeCurrent, 0);
     j.bo("remoteSensor", remoteSensor);         // remote input as a pulse sensor
     j.u("remoteHz", remotePulseRate);
+    j.bo("sasa", canSasa);                      // SASA sensor on the CAN bus as the pressure sensor value
+    j.bo("steerBtn", steerConfig.SteerButton);  // AgOpenGPS: steer button (the CAN engage button needs it)
     j.close();
+
+    canJson(j, now);                             // CAN bus, read only (zCan.ino)
 
     j.obj("hyd");
     j.bo("on", HYDRAULIC_ENABLED && hydConfig.enableToolLift);
@@ -443,21 +448,29 @@ static void apiConfigGet()
     j.u("radioPort", boardCfg.radio);
     j.bo("fema", jdFema);
     j.bo("remote", remoteSensor);
+    j.bo("sasa", canSasa);
+    j.u("canBtn", canBtnMode);
     j.raw("}");
     webReplyJson(200, webBuf);
 }
 
 // gnssPort, gnss2Port, imuPort, radioPort (255 = Auto, 0 = none, 1-8 = SerialN): saved in the EEPROM and the
-// Teensy restarts. fema (0 / 1, the John Deere FEMA valve on the pressure sensor input) and remote (0 / 1, the
-// remote input as a pulse sensor, pulses / s as the pressure sensor value): saved, taken at once.
+// Teensy restarts. fema (0 / 1, the John Deere FEMA valve on the pressure sensor input), remote (0 / 1, the
+// remote input as a pulse sensor, pulses / s as the pressure sensor value), sasa (0 / 1, the SASA sensor on the
+// CAN bus as the pressure sensor value) and canBtn (0 off, 1 armrest, 2 joystick up, 3 both: the CNH engage
+// button on the CAN bus): saved, taken at once.
 static void apiConfigPost(const char* body)
 {
-    long pg, p2, pi, pr, fema, remote;
+    long pg, p2, pi, pr, fema, remote, sasa, canBtn;
     if (!formNum(body, "gnssPort", boardCfg.gnss, 0, 255, pg) || !formNum(body, "gnss2Port", boardCfg.gnss2, 0, 255, p2) ||
         !formNum(body, "imuPort", boardCfg.imu, 0, 255, pi) || !formNum(body, "radioPort", boardCfg.radio, 0, 255, pr))
                                                             { webReplyError(400, "invalid serial port"); return; }
     if (!formNum(body, "fema", jdFema ? 1 : 0, 0, 1, fema)) { webReplyError(400, "fema: 0 or 1"); return; }
     if (!formNum(body, "remote", remoteSensor ? 1 : 0, 0, 1, remote)) { webReplyError(400, "remote: 0 or 1"); return; }
+    if (!formNum(body, "sasa", canSasa ? 1 : 0, 0, 1, sasa))          { webReplyError(400, "sasa: 0 or 1"); return; }
+    if (!formNum(body, "canBtn", canBtnMode, 0, 3, canBtn))          { webReplyError(400, "canBtn: 0 to 3"); return; }
+    if (remote == 1 && sasa == 1)
+    { webReplyError(409, "the remote pulse sensor and the SASA sensor both give the pressure sensor value - switch the other one off first"); return; }
     BoardCfg c = boardCfg;
     c.gnss = (uint8_t)pg; c.gnss2 = (uint8_t)p2; c.imu = (uint8_t)pi; c.radio = (uint8_t)pr;
     const char* portWhy = boardCfgCheck(c);
@@ -465,7 +478,8 @@ static void apiConfigPost(const char* body)
     const bool restart = c.gnss != boardCfg.gnss || c.gnss2 != boardCfg.gnss2 || c.imu != boardCfg.imu || c.radio != boardCfg.radio;
     const bool femaChanged = (fema == 1) != jdFema;
     const bool remoteChanged = (remote == 1) != remoteSensor;
-    if ((restart || femaChanged || remoteChanged) && webEngaged()) { webReplyError(409, "autosteer is engaged - disengage it first"); return; }
+    const bool canChanged = (sasa == 1) != canSasa || (uint8_t)canBtn != canBtnMode;
+    if ((restart || femaChanged || remoteChanged || canChanged) && webEngaged()) { webReplyError(409, "autosteer is engaged - disengage it first"); return; }
     if (femaChanged)
     {
         femaSave(fema == 1);
@@ -475,6 +489,12 @@ static void apiConfigPost(const char* body)
     {
         remoteSave(remote == 1);
         webLog("[web] remote input: %s (saved)", remoteSensor ? "pulse sensor, pulses / s as the pressure sensor value" : "switch");
+    }
+    if (canChanged)
+    {
+        static const char* const btnName[4] = { "off", "armrest button", "hydraulic joystick up", "both" };
+        canSave(sasa == 1, (uint8_t)canBtn);
+        webLog("[web] CAN bus: SASA sensor %s, engage button %s (saved)", canSasa ? "on" : "off", btnName[canBtnMode & 3]);
     }
     if (restart)
     {

@@ -8,8 +8,9 @@
 // One self-contained HTML file, no internet needed, kept in flash (PROGMEM). Dark, or light when the
 // device asks for it; the header button switches and this browser remembers it.
 // Tabs: Status (steering, AgOpenGPS, GPS / dual, IMU, hydraulics, module), Setup (serial ports, John Deere FEMA
-// input, remote pulse sensor), GNSS (commands to the receiver and its answers), IMU (IMU choice, TM171 settings
-// and calibrations), Firmware (update from a .hex file, restart), Messages (the webLog lines).
+// input, remote pulse sensor, CAN bus SASA sensor and CNH engage button), GNSS (commands to the receiver and its
+// answers), IMU (IMU choice, TM171 settings and calibrations), Firmware (update from a .hex file, restart),
+// Messages (the webLog lines).
 #ifndef ZWEBPAGE_H
 #define ZWEBPAGE_H
 
@@ -175,6 +176,19 @@ input[type=text]{font:inherit;font-family:var(--mono);padding:7px 9px;border:1px
   <dl><div class="r hidden" id="rHzR"><dt>Pulses / s</dt><dd id="rHz">–</dd></div></dl>
   <p id="remoteMsg" class="note"></p>
  </div>
+ <div class="card"><h2>CAN bus (read only)</h2>
+  <p class="note">CAN3 (Teensy pins 30 / 31, the board's CAN connector), 250 kbit/s, listen only: the Teensy sends nothing on the bus. Started once one of these is on. Saved and taken at once, only with autosteer off.</p>
+  <div class="swrow"><span id="swSasaOff">Off</span><label class="switch"><input type="checkbox" id="sasaSw" data-lock="e"><span class="knob"></span></label><span id="swSasa">SASA steering wheel sensor</span></div>
+  <p class="note">Frames 0x0CFF104D or 0x301. The steering wheel speed is sent to AgOpenGPS as the pressure sensor value, in place of the pressure sensor input, and autosteer kicks out at the pressure sensor's kickout value. The pressure sensor must be on in AgOpenGPS. Not together with the remote pulse sensor.</p>
+  <label class="opt"><span>CNH engage button<small>Frame 0x14FF7706. Turns autosteer on and off like a second steer button: Steer button must be selected in AgOpenGPS.</small></span><select id="canBtn" data-lock="e"><option value="0">off</option><option value="1">armrest button</option><option value="2">hydraulic joystick up</option><option value="3">both</option></select></label>
+  <dl>
+   <dt>CAN frames</dt><dd id="cFps">–</dd>
+   <div class="r hidden" id="cSasaR"><dt>SASA wheel speed</dt><dd id="cSasa">–</dd></div>
+   <div class="r hidden" id="cBtnR"><dt>Engage button</dt><dd id="cBtn">–</dd></div>
+   <div class="r hidden" id="cLastR"><dt>Last frame</dt><dd id="cLast" class="mono">–</dd></div>
+  </dl>
+  <p id="canMsg" class="note"></p>
+ </div>
 </div>
 </section>
 
@@ -324,13 +338,13 @@ function locks(s){$("install").dataset.off=($("hexFile").files[0]&&!busy)?"":"1"
 function kickTxt(st){
  if(!st.kick)return "none set in AgOpenGPS";
  if(st.kick==="encoder")return "encoder: "+st.pulses+" / "+st.kickMax+" pulses";
- return (st.kick==="pressure"?(st.remoteSensor?"remote pulses / s":st.fema?"FEMA":"pressure"):"current")+": "+st.sensor+" / "+st.kickMax;}
+ return (st.kick==="pressure"?(st.remoteSensor?"remote pulses / s":st.sasa?"SASA":st.fema?"FEMA":"pressure"):"current")+": "+st.sensor+" / "+st.kickMax;}
 function render(s){
  lastS=s;
  const i=s.imu,g=s.gps,st=s.steer,p=s.ports;
  set("hdr",s.ver+" · GNSS "+pn(p.gnss)+" · IMU "+(i.type||"none")+" · "+s.ip);
  const al=[];
- if(s.engaged)al.push("Autosteer is engaged: serial ports, FEMA and remote inputs, GNSS commands, IMU choice, TM171 writes and calibration, restart and firmware update are locked.");
+ if(s.engaged)al.push("Autosteer is engaged: serial ports, FEMA, remote and CAN inputs, GNSS commands, IMU choice, TM171 writes and calibration, restart and firmware update are locked.");
  else if(s.moving)al.push("The tractor is moving ("+fx(s.kmh,1)+" km/h): the firmware update and the gyro / new install calibrations are locked.");
  if(!st.ads)al.push("No ADS1115 found at start-up: the module runs as GPS only, without steering.");
  if(g.pass)al.push("u-blox set-up through USB is running (!AOGR): the GPS data go to USB, not to AgIO.");
@@ -363,6 +377,7 @@ function render(s){
  set("mIp",s.ip+" / "+(s.link?"link up":"no link"));set("mCpu",fx(s.cpuC,1)+" °C");
  set("fRun",s.ver+", built "+s.built);set("fWeb",s.web.req+" / "+s.web.err+" / "+s.web.drop);
  renderKick(st);
+ renderCan(s);
  renderImu(s);
  cfgUi();
  locks(s);
@@ -412,8 +427,8 @@ function renderKick(st){
  $("swAna").className=st.fema?"":"on";$("swFema").className=st.fema?"on":"";
  set("kSet",st.kick==="pressure"?"pressure sensor, kickout "+st.kickMax:st.kick?st.kick+" (not the pressure sensor)":"off");
  set("kVal",st.kick==="pressure"?st.sensor+" / "+st.kickMax:"–");
- set("kSrc",st.remoteSensor?"remote input, pulses / s":st.fema?"pressure input, FEMA":"pressure input, analog");
- vis("kUsR",st.fema&&!st.remoteSensor);if(st.fema)set("kUs",st.femaUs>0?st.femaUs+" µs":"no signal");
+ set("kSrc",st.remoteSensor?"remote input, pulses / s":st.sasa?"CAN bus, SASA wheel speed":st.fema?"pressure input, FEMA":"pressure input, analog");
+ vis("kUsR",st.fema&&!st.remoteSensor&&!st.sasa);if(st.fema)set("kUs",st.femaUs>0?st.femaUs+" µs":"no signal");
  const rs=$("remoteSw");if(!rs.dataset.busy)rs.checked=!!st.remoteSensor;
  $("swRsw").className=st.remoteSensor?"":"on";$("swRpl").className=st.remoteSensor?"on":"";
  vis("rHzR",st.remoteSensor);if(st.remoteSensor)set("rHz",String(st.remoteHz));}
@@ -433,6 +448,35 @@ $("remoteSw").addEventListener("change",async()=>{
   if(!j.ok){set("remoteMsg","Not changed: "+j.error,"note bad");sw.checked=!on;}else set("remoteMsg","Saved: "+(on?"pulse sensor.":"remote switch."),"note ok");
  }catch(e){set("remoteMsg","Cannot reach the module.","note bad");sw.checked=!on;}
  delete sw.dataset.busy;pollStatus();});
+
+// ---- Setup: CAN bus, read only: SASA sensor, CNH engage button (zCan.ino)
+const CANBTN={0:"off",1:"armrest button",2:"hydraulic joystick up",3:"both"};
+function renderCan(s){
+ const c=s.can||{},sw=$("sasaSw");if(!sw.dataset.busy)sw.checked=!!c.sasa;
+ $("swSasaOff").className=c.sasa?"":"on";$("swSasa").className=c.sasa?"on":"";
+ const sel=$("canBtn");if(!sel.dataset.busy)sel.value=String(c.btn||0);
+ if(c.on)pill("cFps",c.fps?c.fps+" /s":"none",c.fps?"ok":"bad");else set("cFps","bus off");
+ vis("cSasaR",!!c.sasa);
+ if(c.sasa)set("cSasa",c.sasaAgo<0?"no SASA frame yet":c.speed+(c.sasaAgo>1000?" (last frame "+ago(Math.round(c.sasaAgo/1000))+")":""));
+ vis("cBtnR",!!c.btn);
+ if(c.btn)set("cBtn",(c.btnAgo<0?"no button frame yet":c.down?"pressed":"released")+(s.steer.steerBtn?"":" – Steer button is not selected in AgOpenGPS"));
+ vis("cLastR",!!c.last);if(c.last)set("cLast",c.last);}
+$("sasaSw").addEventListener("change",async()=>{
+ const sw=$("sasaSw"),on=sw.checked;
+ if(!confirm(on?"Use the SASA steering wheel sensor on the CAN bus as the pressure sensor value?":"Stop using the SASA steering wheel sensor?")){sw.checked=!on;return;}
+ sw.dataset.busy="1";
+ try{const j=await post("/api/config","sasa="+(on?1:0));
+  if(!j.ok){set("canMsg","Not changed: "+j.error,"note bad");sw.checked=!on;}else set("canMsg","Saved: SASA sensor "+(on?"on.":"off."),"note ok");
+ }catch(e){set("canMsg","Cannot reach the module.","note bad");sw.checked=!on;}
+ delete sw.dataset.busy;pollStatus();});
+$("canBtn").addEventListener("change",async()=>{
+ const sel=$("canBtn"),v=sel.value,old=String(lastS&&lastS.can?lastS.can.btn:0);
+ if(!confirm("CNH engage button on the CAN bus: "+CANBTN[v]+"?")){sel.value=old;return;}
+ sel.dataset.busy="1";
+ try{const j=await post("/api/config","canBtn="+v);
+  if(!j.ok){set("canMsg","Not changed: "+j.error,"note bad");sel.value=old;}else set("canMsg","Saved: engage button "+CANBTN[v]+".","note ok");
+ }catch(e){set("canMsg","Cannot reach the module.","note bad");sel.value=old;}
+ delete sel.dataset.busy;pollStatus();});
 
 // ---- GNSS: commands to the receiver and its answers (zGnss.ino)
 let gnAfter=0,gnBusy=false;

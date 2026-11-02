@@ -1,7 +1,8 @@
 /* zBoard.ino - board setup from the web page: the serial ports of the GNSS receivers, the TM171 and the RTK radio,
-   which IMU feeds AgOpenGPS when two are found, the John Deere FEMA valve input and the remote input as a pulse sensor.
+   which IMU feeds AgOpenGPS when two are found, the John Deere FEMA valve input, the remote input as a pulse sensor
+   and the CAN bus inputs (SASA sensor, CNH engage button).
    Autosteer_gps_teensy_v4_1, 2026, after zBoard.ino of AOG_CAN_Teensy4.1. Chosen on the web page (Setup and IMU
-   tabs), saved in the EEPROM (200 = magic, 201-207 = BoardCfg, zWeb.h), taken at start-up (boardCfgLoad, from setup()).
+   tabs), saved in the EEPROM (200 = magic, 201-209 = BoardCfg, zWeb.h), taken at start-up (boardCfgLoad, from setup()).
    Licence: GNU General Public License v3 or later (file COPYING), WITHOUT ANY WARRANTY.
    SPDX-License-Identifier: GPL-3.0-or-later
 */
@@ -18,7 +19,7 @@
 #define BOARD_EE_ADDR  200
 #define BOARD_EE_MAGIC 0x5C
 
-BoardCfg boardCfg = { BOARD_PORT_AUTO, BOARD_PORT_AUTO, BOARD_PORT_AUTO, 3, 0, 0, 0 };
+BoardCfg boardCfg = { BOARD_PORT_AUTO, BOARD_PORT_AUTO, BOARD_PORT_AUTO, 3, 0, 0, 0, 0, 0 };
 
 HardwareSerial* boardSerial(uint8_t n)
 {
@@ -81,6 +82,9 @@ void boardCfgLoad()
     if (boardCfg.imuPref != 1 && boardCfg.imuPref != 2) boardCfg.imuPref = 0;
     jdFema = boardCfg.fema == 1;
     remoteSensor = boardCfg.remote == 1;
+    if (boardCfg.canBtn > 3) boardCfg.canBtn = 0;      // not saved yet (0xFF)
+    canSasa = boardCfg.sasa == 1 && !remoteSensor;     // one source for the pressure sensor value
+    canBtnMode = boardCfg.canBtn;
 }
 
 void boardCfgSave()
@@ -254,4 +258,16 @@ void remoteSave(bool on)
     boardCfgSave();
     remoteSensor = on;
     remoteInputSetup();
+}
+
+// From the web page (autosteer off): saved, and taken at once (the bus is started if needed)
+void canSave(bool sasa, uint8_t btn)
+{
+    boardCfg.sasa = sasa ? 1 : 0;
+    boardCfg.canBtn = btn;
+    boardCfgSave();
+    canSasa = sasa;
+    canBtnMode = btn;
+    canReset();
+    canSetup();
 }

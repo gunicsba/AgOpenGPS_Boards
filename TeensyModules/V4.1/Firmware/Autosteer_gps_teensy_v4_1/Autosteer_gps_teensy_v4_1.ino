@@ -101,9 +101,11 @@ uint32_t gpsReadyTime = 0;        //Used for GGA timeout
 #include <NativeEthernetUdp.h>
 #include "zNet.h"                   //Network stack polled from loop() (zWeb.ino)
 #include "zWeb.h"                   //Web page (zWeb.ino, zOTA.ino, zBoard.ino, TM171.ino)
+#include <FlexCAN_T4.h>             //CAN bus, read only (zCan.ino); here so the generated prototypes know its types
 
 //Web page (zWeb.ino) on the module's address, port 80 (e.g. 192.168.5.126): status, serial ports, John Deere
-//FEMA valve input, TM171 settings & calibration, IMU choice, firmware update over the network (zOTA.ino), messages.
+//FEMA valve input, remote pulse sensor, CAN bus SASA sensor and CNH engage button, GNSS commands, TM171
+//settings & calibration, IMU choice, firmware update over the network (zOTA.ino), messages.
 //Ported from AOG_CAN_Teensy4.1 / renatorgr/Boards v4.5_AiO_WEB (GPL-3.0-or-later, see COPYING)
 
 struct ConfigIP {
@@ -299,7 +301,10 @@ void setup()
 
   Serial.println("\r\nStarting AutoSteer...");
   autosteerSetup();
-  
+
+  //CAN bus, read only: SASA sensor and CNH engage button, when switched on on the web page (zCan.ino)
+  canSetup();
+
   Serial.println("\r\nStarting Ethernet...");
   EthernetStart();
 
@@ -722,6 +727,8 @@ void loop()
       imuTrigger = false;
       imuHandler();
     }
+
+    canLoop();                          //CAN frames: SASA sensor, CNH engage button (zCan.ino)
 
     if (Autosteer_running) autosteerLoop();
     else ReceiveUdp();

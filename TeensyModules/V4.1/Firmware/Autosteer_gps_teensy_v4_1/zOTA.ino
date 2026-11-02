@@ -1,7 +1,7 @@
 /* zOTA.ino - firmware update from the web page.
    Ported from renatorgr/Boards, Firmware/v4.5_AiO_WEB/zOTA.ino (written 2026 by Claude (Anthropic) for renatorgr),
    via AOG_CAN_Teensy4.1. Autosteer_gps_teensy_v4_1, 2026: own family marker; interrupts of this board (all UARTs,
-   the FEMA pin interrupt, the speed pulse tone timer) quieted before the copy.
+   CAN, the pin interrupts, the speed pulse tone timer) quieted before the copy.
    Uses FlasherX by Joe Pasquariello (FlashTxx.c / FlashTxx.h, public domain) for the flash.
    Licence: GNU General Public License v3 or later (file COPYING), WITHOUT ANY WARRANTY.
    SPDX-License-Identifier: GPL-3.0-or-later
@@ -233,7 +233,10 @@ void otaInstall(uint32_t size)
     NVIC_DISABLE_IRQ(IRQ_LPUART6);
     NVIC_DISABLE_IRQ(IRQ_LPUART7);
     NVIC_DISABLE_IRQ(IRQ_LPUART8);
-    NVIC_DISABLE_IRQ(IRQ_GPIO6789);   // pin interrupts (the FEMA pressure input, attachInterrupt)
+    NVIC_DISABLE_IRQ(IRQ_CAN1);
+    NVIC_DISABLE_IRQ(IRQ_CAN2);
+    NVIC_DISABLE_IRQ(IRQ_CAN3);       // SASA sensor, CNH engage button (zCan.ino)
+    NVIC_DISABLE_IRQ(IRQ_GPIO6789);   // pin interrupts (the FEMA pressure input, the remote pulse sensor)
     NVIC_DISABLE_IRQ(IRQ_PIT);        // IntervalTimer: the speed pulse tone()
     flash_move(FLASH_BASE_ADDR, OTA_BUFFER_ADDR, size);   // erases the buffer afterwards, reboots
     for (;;) {}

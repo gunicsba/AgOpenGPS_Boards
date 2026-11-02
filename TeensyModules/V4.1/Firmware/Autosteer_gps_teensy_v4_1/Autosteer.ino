@@ -63,6 +63,13 @@ volatile uint32_t remotePulseN = 0;       //pulses counted, pulse k's millis at 
 volatile uint32_t remotePulseMs[256];
 uint16_t remotePulseRate = 0;             //pulses in the last second, 0 - 255
 
+//CAN bus, read only (zCan.ino): SASA steering wheel sensor as the pressure sensor value, CNH engage button.
+//Set on the web page (Setup tab, zBoard.ino), off until they are set there.
+bool canSasa = false;
+uint8_t canBtnMode = 0;                   //engage button: 0 off, 1 armrest button, 2 hydraulic joystick up, 3 both
+int16_t canSteeringWheelSpeed = 0;        //SASA rotation speed, signed (the sign is the direction)
+bool canEngagePress = false;              //engage button pressed, not yet taken by the steer button code
+
 #define CONST_180_DIVIDED_BY_PI 57.2957795130823
 
 #include <Wire.h>
@@ -129,6 +136,7 @@ uint32_t aogLastMs = 0;       //Last PGN 254 from AgOpenGPS (web page)
 uint8_t guidanceStatus = 0;
 uint8_t prevGuidanceStatus = 0;
 bool guidanceStatusChanged = false;
+uint8_t guidanceBitPrev = 0;    //AgOpenGPS autosteer on / off as the timed loop saw it last (steer button mode)
 
 //speed sent as *10
 float gpsSpeed = 0;
@@ -411,6 +419,31 @@ void autosteerLoop()
         }
       }
       previous = reading;
+
+      //CNH engage button on the CAN bus (zCan.ino): a second steer button
+      if (canEngagePress)
+      {
+        if (currentState == 1)
+        {
+          currentState = 0;
+          steerSwitch = 0;
+          webLog("[can] engage button: steer on");
+        }
+        else
+        {
+          currentState = 1;
+          steerSwitch = 1;
+          webLog("[can] engage button: steer off");
+        }
+      }
+
+      //AgOpenGPS's autosteer button works next to the steer button, as in the CAN board firmware:
+      //switched on there = engage, switched off there = disengage
+      if (bitRead(guidanceStatus, 0) != guidanceBitPrev)
+      {
+        currentState = bitRead(guidanceStatus, 0) ? 0 : 1;
+        steerSwitch = currentState;
+      }
     }
     else                                      // No steer switch and no steer button
     {
@@ -430,6 +463,8 @@ void autosteerLoop()
         previous = 0;
       }
     }
+    canEngagePress = false;                   //taken, or no steer button selected in AgOpenGPS
+    guidanceBitPrev = bitRead(guidanceStatus, 0);  //in every mode: no stale change when the mode is switched
 
     if (steerConfig.ShaftEncoder && pulseCount >= steerConfig.PulseCountMax)
     {
@@ -447,6 +482,27 @@ void autosteerLoop()
       if (remoteSensor) {
         //Pulses of the last second on the remote input are the pressure value
         sensorReading = remotePulseRate;
+
+        if (sensorReading >= steerConfig.PulseCountMax)
+        {
+            steerSwitch = 1; // reset values like it turned off
+            currentState = 1;
+            previous = 0;
+        }
+      } else if (canSasa) {
+        //SASA steering wheel speed on the CAN bus (zCan.ino) is the pressure value
+        if (canSteeringWheelSpeed != 0) {
+          sensorSample = (float)abs(canSteeringWheelSpeed);
+          sensorReading = sensorReading * 0.9 + sensorSample * 0.1;
+          sensorReading = min(sensorReading, 255);
+        }
+        else if (sensorReading > 2.0) {
+          //Wheel stopped but the average still has a residual value - decay quickly to 0
+          sensorReading *= 0.75;
+        }
+        else {
+          sensorReading = 0;
+        }
 
         if (sensorReading >= steerConfig.PulseCountMax)
         {
