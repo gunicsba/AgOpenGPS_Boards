@@ -43,10 +43,32 @@
 //Define sensor pin for current or pressure sensor
 #define CURRENT_SENSOR_PIN A17
 #define PRESSURE_SENSOR_PIN A10
-#define JOHNDEERE true
+//John Deere FEMA valve: the pressure sensor input reads its PWM signal (was #define JOHNDEERE).
+//Set on the web page (Setup tab, zBoard.ino), off until it is set there.
+bool jdFema = false;
 elapsedMicros dutyTime = 0;
-float dutyTimeCurrent = 0;
+volatile float dutyTimeCurrent = 0;
 float dutyTimePrev = 0;
+
+//Consecutive over-threshold loop passes required before FEMA sensor triggers a disengage
+//(filters a single-sample noise/EMI glitch from tripping autosteer off)
+#define JD_FEMA_TRIP_DEBOUNCE 2
+uint8_t jdFemaTripCount = 0;
+
+//Remote input as a pulse sensor: the pulses of the last second are sent as the pressure sensor value.
+//Set on the web page (Setup tab, zBoard.ino), off until it is set there.
+bool remoteSensor = false;
+#define REMOTE_PULSE_MIN_US 2000          //closer edges are contact bounce (up to 500 pulses / s counted)
+volatile uint32_t remotePulseN = 0;       //pulses counted, pulse k's millis at remotePulseMs[k & 0xFF]
+volatile uint32_t remotePulseMs[256];
+uint16_t remotePulseRate = 0;             //pulses in the last second, 0 - 255
+
+//CAN bus, read only (zCan.ino): SASA steering wheel sensor as the pressure sensor value, CNH engage button.
+//Set on the web page (Setup tab, zBoard.ino), off until they are set there.
+bool canSasa = false;
+uint8_t canBtnMode = 0;                   //engage button: 0 off, 1 armrest button, 2 hydraulic joystick up, 3 both
+int16_t canSteeringWheelSpeed = 0;        //SASA rotation speed, signed (the sign is the direction)
+bool canEngagePress = false;              //engage button pressed, not yet taken by the steer button code
 
 #define CONST_180_DIVIDED_BY_PI 57.2957795130823
 
@@ -74,7 +96,7 @@ const uint16_t LOOP_TIME = 25;  //40Hz
 uint32_t autsteerLastTime = LOOP_TIME;
 uint32_t currentTime = LOOP_TIME;
 
-const uint16_t WATCHDOG_THRESHOLD = 100;
+const uint16_t WATCHDOG_THRESHOLD = 20; // 20 * 25ms = 500ms without a valid PGN 254 stops steering
 const uint16_t WATCHDOG_FORCE_VALUE = WATCHDOG_THRESHOLD + 2; // Should be greater than WATCHDOG_THRESHOLD
 uint8_t watchdogTimer = WATCHDOG_FORCE_VALUE;
 
@@ -93,6 +115,7 @@ int8_t PGN_250_Size = sizeof(PGN_250) - 1;
 uint8_t aog2Count = 0;
 float sensorReading;
 float sensorSample;
+elapsedMillis sensorPulseReset;
 
 elapsedMillis gpsSpeedUpdateTimer = 0;
 
@@ -107,10 +130,13 @@ uint8_t tram = 0;
 //Switches
 uint8_t remoteSwitch = 0, workSwitch = 0, steerSwitch = 1, switchByte = 0;
 
+uint32_t aogLastMs = 0;       //Last PGN 254 from AgOpenGPS (web page)
+
 //On Off
 uint8_t guidanceStatus = 0;
 uint8_t prevGuidanceStatus = 0;
 bool guidanceStatusChanged = false;
+uint8_t guidanceBitPrev = 0;    //AgOpenGPS autosteer on / off as the timed loop saw it last (steer button mode)
 
 //speed sent as *10
 float gpsSpeed = 0;
@@ -182,12 +208,75 @@ void ISRJOHNDEERERISING(){
 }
 
 void ISRJOHNDEEREFALLING(){
-  if(dutyTime  < 50) return;
   attachInterrupt(digitalPinToInterrupt(PRESSURE_SENSOR_PIN), ISRJOHNDEERERISING, RISING);
-  dutyTimeCurrent = dutyTime;
+  uint32_t sample = dutyTime;
+
+  //Reject implausible pulses (EMI/wiring glitches) here, on the raw sample, before
+  //it gets blended into the smoothed average. Previously the range check only ran
+  //in the main loop on the already-smoothed value, so a single wild raw sample
+  //could still skew dutyTimeCurrent and look like a fast wheel movement.
+  if (sample <= 50 || sample >= 5000) return;
+
+  if (dutyTimeCurrent == 0) {
+    dutyTimeCurrent = sample;  // seed first reading, no ramp-up
+  } else {
+    dutyTimeCurrent = (dutyTimeCurrent * 0.95) + (sample * 0.05);
+  }
   return;
 }
 
+//Pressure sensor input: the FEMA PWM signal (interrupt) or an analog sensor. Also called by femaSave for the web page.
+void pressureInputSetup()
+{
+  detachInterrupt(digitalPinToInterrupt(PRESSURE_SENSOR_PIN));
+  dutyTimeCurrent = 0;
+  dutyTimePrev = 0;
+  sensorReading = 0;
+  jdFemaTripCount = 0;
+
+  if (jdFema)
+  {
+    pinMode(PRESSURE_SENSOR_PIN, INPUT);
+    attachInterrupt(digitalPinToInterrupt(PRESSURE_SENSOR_PIN), ISRJOHNDEERERISING, RISING);
+  }
+  else
+  {
+    pinMode(PRESSURE_SENSOR_PIN, INPUT_DISABLE);
+  }
+}
+
+void ISRREMOTEPULSE(){
+  static uint32_t lastUs = 0;
+  uint32_t us = micros();
+  if (remotePulseN && us - lastUs < REMOTE_PULSE_MIN_US) return;
+  lastUs = us;
+  remotePulseMs[remotePulseN & 0xFF] = millis();
+  remotePulseN++;
+}
+
+//Pulses on the remote input in the last second, at most 255 (one byte in PGN 250)
+uint16_t remotePulsesLastSecond()
+{
+  const uint32_t n = remotePulseN;
+  const uint32_t now = millis();
+  uint16_t count = 0;
+  while (count < 255 && count < n && now - remotePulseMs[(n - 1 - count) & 0xFF] < 1000) count++;
+  return count;
+}
+
+//Remote input: a switch, or a pulse sensor (interrupt). Also called by remoteSave for the web page.
+void remoteInputSetup()
+{
+  detachInterrupt(digitalPinToInterrupt(REMOTE_PIN));
+  remotePulseN = 0;
+  remotePulseRate = 0;
+  sensorReading = 0;
+
+  if (remoteSensor)
+  {
+    attachInterrupt(digitalPinToInterrupt(REMOTE_PIN), ISRREMOTEPULSE, RISING);
+  }
+}
 
 void autosteerSetup()
 {
@@ -221,14 +310,11 @@ void autosteerSetup()
 
   // Disable digital inputs for analog input pins
   pinMode(CURRENT_SENSOR_PIN, INPUT_DISABLE);
-  if( JOHNDEERE ) 
-  {
-    pinMode(PRESSURE_SENSOR_PIN, INPUT);
-    attachInterrupt(digitalPinToInterrupt(PRESSURE_SENSOR_PIN), ISRJOHNDEERERISING, RISING);  
-  } else {
-    pinMode(PRESSURE_SENSOR_PIN, INPUT_DISABLE);
-  }
-    
+  pressureInputSetup();
+  Serial.println(jdFema ? "Pressure input: John Deere FEMA valve (PWM)" : "Pressure input: analog sensor");
+  remoteInputSetup();
+  if (remoteSensor) Serial.println("Remote input: pulse sensor, pulses / s sent as the pressure sensor value");
+
 
   //set up communication
   Wire1.end();
@@ -333,6 +419,31 @@ void autosteerLoop()
         }
       }
       previous = reading;
+
+      //CNH engage button on the CAN bus (zCan.ino): a second steer button
+      if (canEngagePress)
+      {
+        if (currentState == 1)
+        {
+          currentState = 0;
+          steerSwitch = 0;
+          webLog("[can] engage button: steer on");
+        }
+        else
+        {
+          currentState = 1;
+          steerSwitch = 1;
+          webLog("[can] engage button: steer off");
+        }
+      }
+
+      //AgOpenGPS's autosteer button works next to the steer button, as in the CAN board firmware:
+      //switched on there = engage, switched off there = disengage
+      if (bitRead(guidanceStatus, 0) != guidanceBitPrev)
+      {
+        currentState = bitRead(guidanceStatus, 0) ? 0 : 1;
+        steerSwitch = currentState;
+      }
     }
     else                                      // No steer switch and no steer button
     {
@@ -352,6 +463,8 @@ void autosteerLoop()
         previous = 0;
       }
     }
+    canEngagePress = false;                   //taken, or no steer button selected in AgOpenGPS
+    guidanceBitPrev = bitRead(guidanceStatus, 0);  //in every mode: no stale change when the mode is switched
 
     if (steerConfig.ShaftEncoder && pulseCount >= steerConfig.PulseCountMax)
     {
@@ -360,46 +473,80 @@ void autosteerLoop()
       previous = 0;
     }
 
+    // Remote input as a pulse sensor
+    if (remoteSensor) remotePulseRate = remotePulsesLastSecond();
+
     // Pressure sensor?
     if (steerConfig.PressureSensor)
     {
-      if(JOHNDEERE){
-        if(dutyTimeCurrent > 100 && dutyTimeCurrent < 4500) 
-        {
-//          Serial.print(" , dutyTimeCurrent: ");
-//          Serial.print(dutyTimeCurrent);
-          //current dutyTime should be between 
-          if(abs(dutyTimeCurrent - dutyTimePrev) < 1000) // if it's more than 2000 we jumped...
-          {
-            sensorSample = abs((double)dutyTimeCurrent-2600)/5; //should make it into a smoother transition around 95 to 5 percent
-//            Serial.print(" , sensorSample: ");
-//            Serial.print(sensorSample);
-           sensorReading = abs( ( abs((double)dutyTimePrev-2600)/5 ) - sensorSample);
-//            Serial.print(" , sensorReading: ");
-//            Serial.println(sensorReading);
-            sensorReading = min(sensorReading,255);
-          } else {
-            sensorReading = 0;
-//            Serial.print(" , sensorReading: ");
-//            Serial.println(sensorReading);
-          }
-          dutyTimePrev = dutyTimeCurrent;
-        } else {
-//          Serial.print(" , dutyTimeCurrent else: ");
-//          Serial.println(dutyTimeCurrent);
-          
-        }
-      } else {
-      sensorSample = (float)analogRead(PRESSURE_SENSOR_PIN);
-      sensorSample *= 0.25;
-      sensorReading = sensorReading * 0.6 + sensorSample * 0.4;
-      }
+      if (remoteSensor) {
+        //Pulses of the last second on the remote input are the pressure value
+        sensorReading = remotePulseRate;
 
-      if (sensorReading >= steerConfig.PulseCountMax)
-      {
+        if (sensorReading >= steerConfig.PulseCountMax)
+        {
+            steerSwitch = 1; // reset values like it turned off
+            currentState = 1;
+            previous = 0;
+        }
+      } else if (canSasa) {
+        //SASA steering wheel speed on the CAN bus (zCan.ino) is the pressure value
+        if (canSteeringWheelSpeed != 0) {
+          sensorSample = (float)abs(canSteeringWheelSpeed);
+          sensorReading = sensorReading * 0.9 + sensorSample * 0.1;
+          sensorReading = min(sensorReading, 255);
+        }
+        else if (sensorReading > 2.0) {
+          //Wheel stopped but the average still has a residual value - decay quickly to 0
+          sensorReading *= 0.75;
+        }
+        else {
+          sensorReading = 0;
+        }
+
+        if (sensorReading >= steerConfig.PulseCountMax)
+        {
+            steerSwitch = 1; // reset values like it turned off
+            currentState = 1;
+            previous = 0;
+        }
+      } else if(jdFema){
+        if(dutyTimeCurrent > 100 && dutyTimeCurrent < 4500)
+        {
+          sensorSample = abs((double)dutyTimeCurrent-2600)/5; //should make it into a smoother transition around 95 to 5 percent
+          sensorReading = (min(abs( ( abs((double)dutyTimePrev-2600)/5 ) - sensorSample),255) * 0.6) + (sensorReading * 0.4);
+          dutyTimePrev = dutyTimeCurrent;
+        }
+
+        //Require the trip condition to persist for a couple of loop passes before
+        //disengaging - a genuine hand-on-wheel move lasts many loop cycles, a noise
+        //glitch on the raw ISR reading only shows up for one.
+        if (sensorReading >= steerConfig.PulseCountMax)
+        {
+          if (jdFemaTripCount < 255) jdFemaTripCount++;
+        }
+        else
+        {
+          jdFemaTripCount = 0;
+        }
+
+        if (jdFemaTripCount >= JD_FEMA_TRIP_DEBOUNCE)
+        {
           steerSwitch = 1; // reset values like it turned off
           currentState = 1;
           previous = 0;
+        }
+      } else {
+        sensorSample = (float)analogRead(PRESSURE_SENSOR_PIN);
+        sensorSample *= 0.25;
+        sensorReading = sensorReading * 0.6 + sensorSample * 0.4;
+
+        if (sensorReading >= steerConfig.PulseCountMax)
+        {
+            steerSwitch = 1; // reset values like it turned off
+            currentState = 1;
+            previous = 0;
+        }
       }
     }
 
@@ -419,7 +566,12 @@ void autosteerLoop()
       }
     }
 
+    //Steer switch off or kickout tripped - stop steering right away instead of
+    //waiting for the next PGN 254, which may never come if AgOpenGPS is frozen
+    if (steerSwitch == 1) watchdogTimer = WATCHDOG_FORCE_VALUE;
+
     remoteSwitch = digitalRead(REMOTE_PIN); //read auto steer enable switch open = 0n closed = Off
+    if (remoteSensor) remoteSwitch = 1;     //a pulse sensor is no switch: sent as open
     switchByte = 0;
     switchByte |= (remoteSwitch << 2); //put remote in bit 2
     switchByte |= (steerSwitch << 1);   //put steerswitch status in bit 1 position
@@ -595,6 +747,7 @@ void ReceiveUdp()
         {
             if (autoSteerUdpData[3] == 0xFE && Autosteer_running)  //254
             {
+                aogLastMs = millis();
                 gpsSpeed = ((float)(autoSteerUdpData[5] | autoSteerUdpData[6] << 8)) * 0.1;
                 gpsSpeedUpdateTimer = 0;
 
@@ -768,7 +921,7 @@ void ReceiveUdp()
 
                 SendUdp(helloFromAutoSteer, sizeof(helloFromAutoSteer), Eth_ipDestination, portDestination);
                 }
-                if(useBNO08x || useCMPS)
+                if(useBNO08x || useCMPS || useTM171)
                 {
                  SendUdp(helloFromIMU, sizeof(helloFromIMU), Eth_ipDestination, portDestination); 
                 }
@@ -841,6 +994,9 @@ void EncoderFunc()
 {
   if (encEnable)
   {
+    //Reset counter to 0 if there wasn't any activity for 15 seconds
+    if(sensorPulseReset >= 10000 && steerConfig.PulseCountMax >= 3)  pulseCount = 0;
+    sensorPulseReset = 0;
     pulseCount++;
     encEnable = false;
   }

@@ -12,18 +12,19 @@
 
   ////////////////// User Settings ///////////////////////// 
 #define HYDRAULIC_ENABLED true
-#define HYDRAULIC_DEBUG false
+#define HYDRAULIC_DEBUG true
 
 
 //This Implementation uses the 3 pins on the Ampseal header to control hydraulics.
 //No section control sorry
 
 //These are the pins available on the AIO boards AMPSEAL:
-#define HYDRAULIC_LIFT_OR_UP 26 //A12 was: Hyd_up Used to lift up the hydraulics
-#define HYDRAULIC_LOWER_OR_DOWN 27//A13 was: Hyd_down Used to lower the hydraulics 
-#define HYDRAULIC_TRAMLINE 38 //A14
-
-//
+//26 A12
+//27 A13
+//38 A14
+#define HYDRAULIC_LIFT_OR_UP 38 //was: Hyd_up Used to lift up the hydraulics  
+#define HYDRAULIC_LOWER_OR_DOWN 27 //was: Hyd_down Used to lower the hydraulics   
+#define HYDRAULIC_TRAMLINE 26 //
 
 #include <Wire.h>
 #include <EEPROM.h>

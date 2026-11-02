@@ -7,6 +7,7 @@
 // Teensy Serial 2 RX (7) to F9P Heading receiver TX1 (Relative position from left antenna to right antenna)
 // Teensy Serial 2 TX (8) to F9P Heading receiver RX1
 // F9P Position receiver TX2 to F9P Heading receiver RX2 (RTCM data for Moving Base)
+// (the ports above are found automatically; they can also be set on the web page, zBoard.ino)
 //
 // Configuration of receiver
 // Position F9P
@@ -25,13 +26,21 @@
 // CFG-UART2-BAUDRATE 460800
 // Serial 2 In RTCM
 
+// Forward declarations for handlers
+void GGA_Handler();
+void VTG_Handler();
+void KSXT_Handler();
+
 /************************* User Settings *************************/
 // Serial Ports
 #define SerialAOG Serial                //AgIO USB conection
-#define SerialRTK Serial3               //RTK radio
-HardwareSerial* SerialGPS = &Serial7;   //Main postion receiver (GGA) (Serial2 must be used here with T4.0 / Basic Panda boards - Should auto swap)
-HardwareSerial* SerialGPS2 = &Serial2;  //Dual heading receiver 
+// The ports below are set by boardGnssSetup() (zBoard.ino): detected, or as set on the web page
+HardwareSerial* SerialRTK = &Serial3;   //RTK radio (nullptr = none)
+HardwareSerial* SerialGPS = &Serial7; //7  //Main postion receiver (GGA) (Serial2 must be used here with T4.0 / Basic Panda boards - Should auto swap)
+HardwareSerial* SerialGPS2 = &Serial2;  //2 Dual heading receiver (nullptr = none)
 HardwareSerial* SerialGPSTmp = NULL;
+bool gpsAutoSwap = true;                //GNSS port on Auto: swap SerialGPS / SerialGPS2 while there is no GGA
+uint32_t gpsRxBytes = 0, ntripRxBytes = 0, radioRxBytes = 0;   //Byte counters for the web page (zWeb.ino)
 //HardwareSerial* SerialAOG = &Serial;
 
 const int32_t baudAOG = 115200;
@@ -90,6 +99,14 @@ uint32_t gpsReadyTime = 0;        //Used for GGA timeout
 #ifdef ARDUINO_TEENSY41
 #include <NativeEthernet.h>
 #include <NativeEthernetUdp.h>
+#include "zNet.h"                   //Network stack polled from loop() (zWeb.ino)
+#include "zWeb.h"                   //Web page (zWeb.ino, zOTA.ino, zBoard.ino, TM171.ino)
+#include <FlexCAN_T4.h>             //CAN bus, read only (zCan.ino); here so the generated prototypes know its types
+
+//Web page (zWeb.ino) on the module's address, port 80 (e.g. 192.168.5.126): status, serial ports, John Deere
+//FEMA valve input, remote pulse sensor, CAN bus SASA sensor and CNH engage button, GNSS commands, TM171
+//settings & calibration, IMU choice, firmware update over the network (zOTA.ino), messages.
+//Ported from AOG_CAN_Teensy4.1 / renatorgr/Boards v4.5_AiO_WEB (GPL-3.0-or-later, see COPYING)
 
 struct ConfigIP {
     uint8_t ipOne = 192;
@@ -142,7 +159,14 @@ bool dualReadyRelPos = false;
 
 // booleans to see if we are using CMPS or BNO08x
 bool useCMPS = false;
-bool useBNO08x = false;
+bool useBNO08x = false;          // the IMU that feeds AgOpenGPS (imuSelect, zBoard.ino)
+bool useTM171 = false;
+bool bnoFound = false;           // found at start-up: both keep running, the web page chooses which one is used
+bool tm171Found = false;
+
+elapsedMillis TM171lastData;
+elapsedMillis imuTimer;
+bool imuTrigger = false;
 
 //CMPS always x60
 #define CMPS14_ADDRESS 0x60
@@ -172,8 +196,9 @@ uint8_t GPS2rxbuffer[serial_buffer_size];   //Extra serial rx buffer
 uint8_t GPS2txbuffer[serial_buffer_size];   //Extra serial tx buffer
 uint8_t RTKrxbuffer[serial_buffer_size];    //Extra serial rx buffer
 
-/* A parser is declared with 3 handlers at most */
-NMEAParser<2> parser;
+
+/* A parser is declared with 5 handlers at most */
+NMEAParser<5> parser;
 
 bool isTriggered = false;
 bool blink = false;
@@ -243,30 +268,43 @@ void setup()
   parser.setErrorHandler(errorHandler);
   parser.addHandler("G-GGA", GGA_Handler);
   parser.addHandler("G-VTG", VTG_Handler);
+  parser.addHandler("KSXT-", KSXT_Handler);
 
   delay(10);
   Serial.begin(baudAOG);
   delay(10);
   Serial.println("Start setup");
 
+  boardCfgLoad();                     //Serial ports, IMU choice, FEMA input: web page settings (zBoard.ino)
+  boardGnssSetup();                   //GNSS ports: detected (Auto) or as set on the web page
+
   SerialGPS->begin(baudGPS);
   SerialGPS->addMemoryForRead(GPSrxbuffer, serial_buffer_size);
   SerialGPS->addMemoryForWrite(GPStxbuffer, serial_buffer_size);
 
   delay(10);
-  SerialRTK.begin(baudRTK);
-  SerialRTK.addMemoryForRead(RTKrxbuffer, serial_buffer_size);
+  if (SerialRTK)
+  {
+    SerialRTK->begin(baudRTK);
+    SerialRTK->addMemoryForRead(RTKrxbuffer, serial_buffer_size);
+  }
 
   delay(10);
-  SerialGPS2->begin(baudGPS);
-  SerialGPS2->addMemoryForRead(GPS2rxbuffer, serial_buffer_size);
-  SerialGPS2->addMemoryForWrite(GPS2txbuffer, serial_buffer_size);
+  if (SerialGPS2)
+  {
+    SerialGPS2->begin(baudGPS);
+    SerialGPS2->addMemoryForRead(GPS2rxbuffer, serial_buffer_size);
+    SerialGPS2->addMemoryForWrite(GPS2txbuffer, serial_buffer_size);
+  }
 
   Serial.println("SerialAOG, SerialRTK, SerialGPS and SerialGPS2 initialized");
 
   Serial.println("\r\nStarting AutoSteer...");
   autosteerSetup();
-  
+
+  //CAN bus, read only: SASA sensor and CNH engage button, when switched on on the web page (zCan.ino)
+  canSetup();
+
   Serial.println("\r\nStarting Ethernet...");
   EthernetStart();
 
@@ -325,7 +363,7 @@ void setup()
 
                   // Use gameRotationVector and set REPORT_INTERVAL
                   bno08x.enableGameRotationVector(REPORT_INTERVAL);
-                  useBNO08x = true;
+                  bnoFound = true;
               }
               else
               {
@@ -339,22 +377,31 @@ void setup()
               Serial.print(bno08xAddress, HEX);
               Serial.println(" BNO08X not Connected or Found");
           }
-          if (useBNO08x) break;
+          if (bnoFound) break;
       }
+
+      boardImuSetup();                //TM171: Serial7 / Serial5 (Auto), or the port set on the web page (zBoard.ino)
   }
+
+  imuSelect();                        //Which IMU feeds AgOpenGPS when both are found (zBoard.ino)
 
   delay(100);
   Serial.print("\r\nuseCMPS = ");
   Serial.println(useCMPS);
   Serial.print("useBNO08x = ");
   Serial.println(useBNO08x);
+  Serial.print("useTM171 = ");
+  Serial.println(useTM171);
 
+  if (Ethernet_running) { Serial.print("\r\nWeb page: http://"); Serial.print(Ethernet.localIP()); Serial.println("/"); }
   Serial.println("\r\nEnd setup, waiting for GPS...\r\n");
+
+  netPollFromLoop();                  //From now on the network stack runs from loop(), not from a timer interrupt (zNet.h)
 }
 
 void loop()
 {
-    if (GGA_Available == false && !passThroughGPS && !passThroughGPS2)
+    if (GGA_Available == false && !passThroughGPS && !passThroughGPS2 && gpsAutoSwap && SerialGPS2)
     {
         if (systick_millis_count - PortSwapTime >= 10000)
         {
@@ -388,9 +435,8 @@ void loop()
             {
                 HardwareSerial* autoBaudSerial = NULL;
 
-                // Reset SerialGPS and SerialGPS2
-                SerialGPS = &Serial7;
-                SerialGPS2 = &Serial2;
+                // Reset SerialGPS and SerialGPS2 (Serial7 / Serial2, or as set on the web page)
+                boardGnssConfigPorts();
 
                 if (aogSerialCmdBuffer[aogSerialCmdCounter + 1] == '1')
                 {
@@ -432,7 +478,7 @@ void loop()
                 bool communicationSuccessfull = false;
 				uint32_t baudrate = 0;                
 
-				for (uint32_t i = 0; i < nrBaudrates; i++)
+				for (uint32_t i = 0; autoBaudSerial && i < nrBaudrates; i++)   // no port: no dual receiver set
 				{
 					baudrate = baudrates[i];
 
@@ -440,7 +486,7 @@ void loop()
 					Serial.println(baudrate);
 
 					autoBaudSerial->begin(baudrate);
-					delay(100);
+					netDelay(100);              // keeps the network stack going (zNet.h)
 
 					// first send dumb data to make sure its on
 					autoBaudSerial->write(0xFF);
@@ -468,6 +514,7 @@ void loop()
 
 					do
 					{
+						netPoll();
 						while (autoBaudSerial->available() > 0)
 						{
 							incoming = autoBaudSerial->read();
@@ -570,7 +617,7 @@ void loop()
         }
         else if (passThroughGPS2)
         {
-            SerialGPS2->write(incoming_char);
+            if (SerialGPS2) SerialGPS2->write(incoming_char);
         }
         else
         {
@@ -581,22 +628,27 @@ void loop()
     // Read incoming nmea from GPS
     if (SerialGPS->available())
     {
+        char c = SerialGPS->read();
+        gpsRxBytes++;
+        gnssMonByte(c);   //answers to the commands from the web page (zGnss.ino)
+
         if (passThroughGPS)
         {
-            SerialAOG.write(SerialGPS->read());
+            SerialAOG.write(c);
         }
         else
         {
-            parser << SerialGPS->read();
+            parser << c;
         }
     }
 
     udpNtrip();
 
     // Check for RTK Radio
-    if (SerialRTK.available())
+    if (SerialRTK && SerialRTK->available())
     {
-        SerialGPS->write(SerialRTK.read());
+        SerialGPS->write(SerialRTK->read());
+        radioRxBytes++;
     }
 
     // If both dual messages are ready, send to AgOpen
@@ -608,7 +660,7 @@ void loop()
     }
 
     // If anything comes in SerialGPS2 RelPos data
-    if (SerialGPS2->available())
+    if (SerialGPS2 && SerialGPS2->available())
     {
         uint8_t incoming_char = SerialGPS2->read();  //Read RELPOSNED from F9P
 
@@ -662,16 +714,29 @@ void loop()
       useDual = false;
     }
 
-    //Read BNO
-    if((systick_millis_count - READ_BNO_TIME) > REPORT_INTERVAL && useBNO08x)
+    //Read BNO (every IMU found keeps running; the one in use, useBNO08x / useTM171, feeds AgOpenGPS)
+    if((systick_millis_count - READ_BNO_TIME) > REPORT_INTERVAL && bnoFound)
     {
       READ_BNO_TIME = systick_millis_count;
       readBNO();
     }
-    
+
+    if (tm171Found) TM171process();
+    if(useTM171 && imuTimer > 70 && imuTrigger)
+    {
+      imuTrigger = false;
+      imuHandler();
+    }
+
+    canLoop();                          //CAN frames: SASA sensor, CNH engage button (zCan.ino)
+
     if (Autosteer_running) autosteerLoop();
     else ReceiveUdp();
-    
+
+    //Network stack and web page (zWeb.ino), also runs the TM171 settings / calibration
+    netPoll();
+    webLoop();
+
   if (Ethernet.linkStatus() == LinkOFF) 
   {
     digitalWrite(Power_on_LED, 1);
@@ -684,6 +749,64 @@ void loop()
   }
 }//End Loop
 //**************************************************************************
+
+bool detectGGAOnPort(HardwareSerial* port, uint32_t detectionMs)
+{
+    const char* pattern1 = "$GNGGA";
+    const char* pattern2 = "$GPGGA";
+    uint8_t idx1 = 0;
+    uint8_t idx2 = 0;
+
+    port->begin(baudGPS);
+    delay(100);
+
+    while (port->available())
+    {
+        port->read();
+    }
+
+    uint32_t start = millis();
+
+    while (millis() - start < detectionMs)
+    {
+        while (port->available())
+        {
+            char c = port->read();
+
+            if (c == pattern1[idx1])
+            {
+                idx1++;
+                if (pattern1[idx1] == '\0')
+                {
+                    port->end();
+                    return true;
+                }
+            }
+            else
+            {
+                idx1 = (c == pattern1[0]) ? 1 : 0;
+            }
+
+            if (c == pattern2[idx2])
+            {
+                idx2++;
+                if (pattern2[idx2] == '\0')
+                {
+                    port->end();
+                    return true;
+                }
+            }
+            else
+            {
+                idx2 = (c == pattern2[0]) ? 1 : 0;
+            }
+        }
+    }
+
+    port->end();
+
+    return false;
+}
 
 bool calcChecksum()
 {
