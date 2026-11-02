@@ -19,7 +19,9 @@
 #define BOARD_EE_ADDR  200
 #define BOARD_EE_MAGIC 0x5C
 
-BoardCfg boardCfg = { BOARD_PORT_AUTO, BOARD_PORT_AUTO, BOARD_PORT_AUTO, 3, 0, 0, 0, 0, 0, 0 };
+// Nothing saved from the web page yet: steering with a Keya motor (motor 1). Saved before the motor setting
+// existed (byte 210 = 0xFF): hydraulic, as those boards ran (boardCfgLoad).
+BoardCfg boardCfg = { BOARD_PORT_AUTO, BOARD_PORT_AUTO, BOARD_PORT_AUTO, 3, 0, 0, 0, 0, 0, 1 };
 
 HardwareSerial* boardSerial(uint8_t n)
 {
@@ -85,7 +87,7 @@ void boardCfgLoad()
     if (boardCfg.canBtn > 3) boardCfg.canBtn = 0;      // not saved yet (0xFF)
     canSasa = boardCfg.sasa == 1 && !remoteSensor;     // one source for the pressure sensor value
     canBtnMode = boardCfg.canBtn;
-    if (boardCfg.motor > 3) boardCfg.motor = 0;        // not saved yet (0xFF): hydraulic
+    if (boardCfg.motor > 3) boardCfg.motor = 0;        // saved by an older web page build (0xFF): hydraulic
     steerMotor = boardCfg.motor;
     if (steerMotor) { canSasa = false; canBtnMode = 0; }   // the CAN bus is the motor's (kept for hydraulic)
     Serial.printf("Steering (web page, Setup): %s\r\n", steerMotor ? motorName(steerMotor) : "hydraulic valve / PWM driver");
