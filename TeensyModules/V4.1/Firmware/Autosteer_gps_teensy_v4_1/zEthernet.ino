@@ -4,6 +4,10 @@ void EthernetStart()
   // start the Ethernet connection:
   Serial.println("Initializing ethernet with static IP address");
 
+  // Socket buffers of 8 KB (the library's are 2 KB) for the web page: 8 sockets x 2 x 8 KB + a 96 KB stack heap, in RAM2
+  Ethernet.setStackHeap(96 * 1024);
+  Ethernet.setSocketSize(8 * 1024);
+
   // try to congifure using IP:
   Ethernet.begin(mac,0);          // Start Ethernet with IP 0.0.0.0
 
@@ -69,5 +73,7 @@ void EthernetStart()
     Serial.print("Ethernet AutoSteer UDP listening to & send from port: ");
     Serial.println(AOGAutoSteerPort);
   }
+
+  webSetup();                     //Web page on port 80 (zWeb.ino)
  #endif
 }

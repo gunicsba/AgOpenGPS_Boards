@@ -11,8 +11,10 @@ void udpNtrip()
   
   if (packetLength > 0)
   {
+    if (packetLength > sizeof(Eth_NTRIP_packetBuffer)) packetLength = sizeof(Eth_NTRIP_packetBuffer);   // cut, not an overflow
     Eth_udpNtrip.read(Eth_NTRIP_packetBuffer, packetLength);
     SerialGPS->write(Eth_NTRIP_packetBuffer, packetLength);
+    ntripRxBytes += packetLength;
   }
  #endif
 }

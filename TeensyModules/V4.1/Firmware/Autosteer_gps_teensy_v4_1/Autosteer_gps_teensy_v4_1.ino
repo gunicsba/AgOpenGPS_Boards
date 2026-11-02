@@ -7,6 +7,7 @@
 // Teensy Serial 2 RX (7) to F9P Heading receiver TX1 (Relative position from left antenna to right antenna)
 // Teensy Serial 2 TX (8) to F9P Heading receiver RX1
 // F9P Position receiver TX2 to F9P Heading receiver RX2 (RTCM data for Moving Base)
+// (the ports above are found automatically; they can also be set on the web page, zBoard.ino)
 //
 // Configuration of receiver
 // Position F9P
@@ -33,10 +34,13 @@ void KSXT_Handler();
 /************************* User Settings *************************/
 // Serial Ports
 #define SerialAOG Serial                //AgIO USB conection
-#define SerialRTK Serial3               //RTK radio
+// The ports below are set by boardGnssSetup() (zBoard.ino): detected, or as set on the web page
+HardwareSerial* SerialRTK = &Serial3;   //RTK radio (nullptr = none)
 HardwareSerial* SerialGPS = &Serial7; //7  //Main postion receiver (GGA) (Serial2 must be used here with T4.0 / Basic Panda boards - Should auto swap)
-HardwareSerial* SerialGPS2 = &Serial2;  //2 Dual heading receiver 
+HardwareSerial* SerialGPS2 = &Serial2;  //2 Dual heading receiver (nullptr = none)
 HardwareSerial* SerialGPSTmp = NULL;
+bool gpsAutoSwap = true;                //GNSS port on Auto: swap SerialGPS / SerialGPS2 while there is no GGA
+uint32_t gpsRxBytes = 0, ntripRxBytes = 0, radioRxBytes = 0;   //Byte counters for the web page (zWeb.ino)
 //HardwareSerial* SerialAOG = &Serial;
 
 const int32_t baudAOG = 115200;
@@ -95,6 +99,12 @@ uint32_t gpsReadyTime = 0;        //Used for GGA timeout
 #ifdef ARDUINO_TEENSY41
 #include <NativeEthernet.h>
 #include <NativeEthernetUdp.h>
+#include "zNet.h"                   //Network stack polled from loop() (zWeb.ino)
+#include "zWeb.h"                   //Web page (zWeb.ino, zOTA.ino, zBoard.ino, TM171.ino)
+
+//Web page (zWeb.ino) on the module's address, port 80 (e.g. 192.168.5.126): status, serial ports, John Deere
+//FEMA valve input, TM171 settings & calibration, IMU choice, firmware update over the network (zOTA.ino), messages.
+//Ported from AOG_CAN_Teensy4.1 / renatorgr/Boards v4.5_AiO_WEB (GPL-3.0-or-later, see COPYING)
 
 struct ConfigIP {
     uint8_t ipOne = 192;
@@ -147,8 +157,10 @@ bool dualReadyRelPos = false;
 
 // booleans to see if we are using CMPS or BNO08x
 bool useCMPS = false;
-bool useBNO08x = false;
+bool useBNO08x = false;          // the IMU that feeds AgOpenGPS (imuSelect, zBoard.ino)
 bool useTM171 = false;
+bool bnoFound = false;           // found at start-up: both keep running, the web page chooses which one is used
+bool tm171Found = false;
 
 elapsedMillis TM171lastData;
 elapsedMillis imuTimer;
@@ -261,47 +273,27 @@ void setup()
   delay(10);
   Serial.println("Start setup");
 
-  Serial.println("Detecting GNSS port (Serial2 / Serial7)...");
-  bool foundGnssOnSerial2 = detectGGAOnPort(&Serial2, 300);
-  bool foundGnssOnSerial7 = false;
-
-  if (!foundGnssOnSerial2)
-  {
-    foundGnssOnSerial7 = detectGGAOnPort(&Serial7, 300);
-  }
-
-  if (foundGnssOnSerial7)
-  {
-    Serial.println("GNSS detected on Serial7");
-    SerialGPS = &Serial7;
-    SerialGPS2 = &Serial2;
-  }
-  else
-  {
-    if (foundGnssOnSerial2)
-    {
-      Serial.println("GNSS detected on Serial2");
-    }
-    else
-    {
-      Serial.println("GNSS not detected on Serial2 or Serial7, using defaults");
-    }
-    SerialGPS = &Serial2;
-    SerialGPS2 = &Serial5;
-  }
+  boardCfgLoad();                     //Serial ports, IMU choice, FEMA input: web page settings (zBoard.ino)
+  boardGnssSetup();                   //GNSS ports: detected (Auto) or as set on the web page
 
   SerialGPS->begin(baudGPS);
   SerialGPS->addMemoryForRead(GPSrxbuffer, serial_buffer_size);
   SerialGPS->addMemoryForWrite(GPStxbuffer, serial_buffer_size);
 
   delay(10);
-  SerialRTK.begin(baudRTK);
-  SerialRTK.addMemoryForRead(RTKrxbuffer, serial_buffer_size);
+  if (SerialRTK)
+  {
+    SerialRTK->begin(baudRTK);
+    SerialRTK->addMemoryForRead(RTKrxbuffer, serial_buffer_size);
+  }
 
   delay(10);
-  SerialGPS2->begin(baudGPS);
-  SerialGPS2->addMemoryForRead(GPS2rxbuffer, serial_buffer_size);
-  SerialGPS2->addMemoryForWrite(GPS2txbuffer, serial_buffer_size);
+  if (SerialGPS2)
+  {
+    SerialGPS2->begin(baudGPS);
+    SerialGPS2->addMemoryForRead(GPS2rxbuffer, serial_buffer_size);
+    SerialGPS2->addMemoryForWrite(GPS2txbuffer, serial_buffer_size);
+  }
 
   Serial.println("SerialAOG, SerialRTK, SerialGPS and SerialGPS2 initialized");
 
@@ -366,7 +358,7 @@ void setup()
 
                   // Use gameRotationVector and set REPORT_INTERVAL
                   bno08x.enableGameRotationVector(REPORT_INTERVAL);
-                  useBNO08x = true;
+                  bnoFound = true;
               }
               else
               {
@@ -380,46 +372,13 @@ void setup()
               Serial.print(bno08xAddress, HEX);
               Serial.println(" BNO08X not Connected or Found");
           }
-          if (useBNO08x) break;
+          if (bnoFound) break;
       }
 
-        Serial.println("\r\nChecking for TM171 on Serial7 / Serial5");
-
-        bool foundTM171 = false;
-        HardwareSerial* gnssMain = SerialGPS;
-
-        if (&Serial7 != gnssMain)
-        {
-            if (TM171detectOnPort(&Serial7, 1500))
-            {
-                Serial.println("Received data from TM171 on Serial7");
-                foundTM171 = true;
-            }
-        }
-
-        if (!foundTM171 && &Serial5 != gnssMain)
-        {
-            if (TM171detectOnPort(&Serial5, 1500))
-            {
-                Serial.println("Received data from TM171 on Serial5");
-                foundTM171 = true;
-
-                if (SerialGPS2 == &Serial5)
-                {
-                    SerialGPS2 = &Serial2;
-                }
-            }
-        }
-
-        if (foundTM171)
-        {
-            useTM171 = true;
-        }
-        else
-        {
-            Serial.println("TM171 not Connected or Found");
-        }
+      boardImuSetup();                //TM171: Serial7 / Serial5 (Auto), or the port set on the web page (zBoard.ino)
   }
+
+  imuSelect();                        //Which IMU feeds AgOpenGPS when both are found (zBoard.ino)
 
   delay(100);
   Serial.print("\r\nuseCMPS = ");
@@ -429,12 +388,15 @@ void setup()
   Serial.print("useTM171 = ");
   Serial.println(useTM171);
 
+  if (Ethernet_running) { Serial.print("\r\nWeb page: http://"); Serial.print(Ethernet.localIP()); Serial.println("/"); }
   Serial.println("\r\nEnd setup, waiting for GPS...\r\n");
+
+  netPollFromLoop();                  //From now on the network stack runs from loop(), not from a timer interrupt (zNet.h)
 }
 
 void loop()
 {
-    if (GGA_Available == false && !passThroughGPS && !passThroughGPS2)
+    if (GGA_Available == false && !passThroughGPS && !passThroughGPS2 && gpsAutoSwap && SerialGPS2)
     {
         if (systick_millis_count - PortSwapTime >= 10000)
         {
@@ -468,9 +430,8 @@ void loop()
             {
                 HardwareSerial* autoBaudSerial = NULL;
 
-                // Reset SerialGPS and SerialGPS2
-                SerialGPS = &Serial7;
-                SerialGPS2 = &Serial2;
+                // Reset SerialGPS and SerialGPS2 (Serial7 / Serial2, or as set on the web page)
+                boardGnssConfigPorts();
 
                 if (aogSerialCmdBuffer[aogSerialCmdCounter + 1] == '1')
                 {
@@ -512,7 +473,7 @@ void loop()
                 bool communicationSuccessfull = false;
 				uint32_t baudrate = 0;                
 
-				for (uint32_t i = 0; i < nrBaudrates; i++)
+				for (uint32_t i = 0; autoBaudSerial && i < nrBaudrates; i++)   // no port: no dual receiver set
 				{
 					baudrate = baudrates[i];
 
@@ -520,7 +481,7 @@ void loop()
 					Serial.println(baudrate);
 
 					autoBaudSerial->begin(baudrate);
-					delay(100);
+					netDelay(100);              // keeps the network stack going (zNet.h)
 
 					// first send dumb data to make sure its on
 					autoBaudSerial->write(0xFF);
@@ -548,6 +509,7 @@ void loop()
 
 					do
 					{
+						netPoll();
 						while (autoBaudSerial->available() > 0)
 						{
 							incoming = autoBaudSerial->read();
@@ -650,7 +612,7 @@ void loop()
         }
         else if (passThroughGPS2)
         {
-            SerialGPS2->write(incoming_char);
+            if (SerialGPS2) SerialGPS2->write(incoming_char);
         }
         else
         {
@@ -662,7 +624,9 @@ void loop()
     if (SerialGPS->available())
     {
         char c = SerialGPS->read();
-        
+        gpsRxBytes++;
+        gnssMonByte(c);   //answers to the commands from the web page (zGnss.ino)
+
         if (passThroughGPS)
         {
             SerialAOG.write(c);
@@ -676,9 +640,10 @@ void loop()
     udpNtrip();
 
     // Check for RTK Radio
-    if (SerialRTK.available())
+    if (SerialRTK && SerialRTK->available())
     {
-        SerialGPS->write(SerialRTK.read());
+        SerialGPS->write(SerialRTK->read());
+        radioRxBytes++;
     }
 
     // If both dual messages are ready, send to AgOpen
@@ -690,7 +655,7 @@ void loop()
     }
 
     // If anything comes in SerialGPS2 RelPos data
-    if (SerialGPS2->available())
+    if (SerialGPS2 && SerialGPS2->available())
     {
         uint8_t incoming_char = SerialGPS2->read();  //Read RELPOSNED from F9P
 
@@ -744,23 +709,27 @@ void loop()
       useDual = false;
     }
 
-    //Read BNO
-    if((systick_millis_count - READ_BNO_TIME) > REPORT_INTERVAL && useBNO08x)
+    //Read BNO (every IMU found keeps running; the one in use, useBNO08x / useTM171, feeds AgOpenGPS)
+    if((systick_millis_count - READ_BNO_TIME) > REPORT_INTERVAL && bnoFound)
     {
       READ_BNO_TIME = systick_millis_count;
       readBNO();
     }
 
-    TM171process();
-    if(useTM171 && imuTimer > 70 && imuTrigger) 
+    if (tm171Found) TM171process();
+    if(useTM171 && imuTimer > 70 && imuTrigger)
     {
       imuTrigger = false;
       imuHandler();
     }
-    
+
     if (Autosteer_running) autosteerLoop();
     else ReceiveUdp();
-    
+
+    //Network stack and web page (zWeb.ino), also runs the TM171 settings / calibration
+    netPoll();
+    webLoop();
+
   if (Ethernet.linkStatus() == LinkOFF) 
   {
     digitalWrite(Power_on_LED, 1);
