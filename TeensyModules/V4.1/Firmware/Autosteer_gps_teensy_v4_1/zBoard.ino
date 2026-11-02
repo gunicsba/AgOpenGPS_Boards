@@ -1,8 +1,8 @@
 /* zBoard.ino - board setup from the web page: the serial ports of the GNSS receivers, the TM171 and the RTK radio,
    which IMU feeds AgOpenGPS when two are found, the John Deere FEMA valve input, the remote input as a pulse sensor
-   and the CAN bus inputs (SASA sensor, CNH engage button).
+   the CAN bus inputs (SASA sensor, CNH engage button) and the steering (hydraulic or a direct drive motor).
    Autosteer_gps_teensy_v4_1, 2026, after zBoard.ino of AOG_CAN_Teensy4.1. Chosen on the web page (Setup and IMU
-   tabs), saved in the EEPROM (200 = magic, 201-209 = BoardCfg, zWeb.h), taken at start-up (boardCfgLoad, from setup()).
+   tabs), saved in the EEPROM (200 = magic, 201-210 = BoardCfg, zWeb.h), taken at start-up (boardCfgLoad, from setup()).
    Licence: GNU General Public License v3 or later (file COPYING), WITHOUT ANY WARRANTY.
    SPDX-License-Identifier: GPL-3.0-or-later
 */
@@ -19,7 +19,7 @@
 #define BOARD_EE_ADDR  200
 #define BOARD_EE_MAGIC 0x5C
 
-BoardCfg boardCfg = { BOARD_PORT_AUTO, BOARD_PORT_AUTO, BOARD_PORT_AUTO, 3, 0, 0, 0, 0, 0 };
+BoardCfg boardCfg = { BOARD_PORT_AUTO, BOARD_PORT_AUTO, BOARD_PORT_AUTO, 3, 0, 0, 0, 0, 0, 0 };
 
 HardwareSerial* boardSerial(uint8_t n)
 {
@@ -85,6 +85,10 @@ void boardCfgLoad()
     if (boardCfg.canBtn > 3) boardCfg.canBtn = 0;      // not saved yet (0xFF)
     canSasa = boardCfg.sasa == 1 && !remoteSensor;     // one source for the pressure sensor value
     canBtnMode = boardCfg.canBtn;
+    if (boardCfg.motor > 3) boardCfg.motor = 0;        // not saved yet (0xFF): hydraulic
+    steerMotor = boardCfg.motor;
+    if (steerMotor) { canSasa = false; canBtnMode = 0; }   // the CAN bus is the motor's (kept for hydraulic)
+    Serial.printf("Steering (web page, Setup): %s\r\n", steerMotor ? motorName(steerMotor) : "hydraulic valve / PWM driver");
 }
 
 void boardCfgSave()

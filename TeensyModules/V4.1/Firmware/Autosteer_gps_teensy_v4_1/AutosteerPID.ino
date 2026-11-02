@@ -26,7 +26,7 @@ void calcSteeringPID(void)
 
     if (steerConfig.MotorDriveDirection) pwmDrive *= -1;
 
-    if (steerConfig.IsDanfoss)
+    if (steerConfig.IsDanfoss && !steerMotor)   //not for a direct drive motor (zMotor.ino)
     {
         // Danfoss: PWM 25% On = Left Position max  (below Valve=Center)
         // Danfoss: PWM 50% On = Center Position
@@ -53,10 +53,16 @@ void calcSteeringPID(void)
 
 void motorDrive(void)
 {
+  // Direct drive motor on the CAN bus: Keya, Allynav, FJD (zMotor.ino)
+  if (steerMotor)
+  {
+    motorSteer(pwmDrive);
+    pwmDisplay = abs(pwmDrive);
+  }
   // Used with Cytron MD30C Driver
   // Steering Motor
   // Dir + PWM Signal
-  if (steerConfig.CytronDriver)
+  else if (steerConfig.CytronDriver)
   {
     // Cytron MD30C Driver Dir + PWM Signal
     if (pwmDrive >= 0)

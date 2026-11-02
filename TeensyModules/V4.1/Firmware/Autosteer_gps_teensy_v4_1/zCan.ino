@@ -6,6 +6,8 @@
 */
 // CAN3 (Teensy pins 30 CRX3 / 31 CTX3, through the board's CAN transceiver), 250 kbit/s, LISTEN_ONLY: the
 // Teensy never sends on the bus and does not acknowledge frames. Started only once one of the two is on.
+// With a direct drive steering motor (Setup tab) the bus is the motor's instead (zMotor.ino): normal mode, its
+// bit rate, and none of these two.
 //
 // SASA steering wheel sensor: its rotation speed is the pressure sensor value (Autosteer.ino), so the kickout
 // of the pressure sensor in AgOpenGPS works with it. Both frames are taken:
@@ -24,7 +26,7 @@
 #define CAN_BTN_ID        0x14FF7706   // CNH armrest / joystick buttons
 #define CAN_SASA_WINDOW   20           // 0x301: frames per speed value
 
-FlexCAN_T4<CAN3, RX_SIZE_256, TX_SIZE_16> canBus;
+FlexCAN_T4<CAN3, RX_SIZE_256, TX_SIZE_64> canBus;      // also the direct drive motor's (zMotor.ino)
 bool     canStarted = false;
 uint32_t canFrames = 0;              // frames received (the filters let only the three IDs in)
 uint32_t canFps = 0;                 // frames per second (webRates, zWeb.ino)
@@ -42,6 +44,13 @@ uint8_t  canSasaWinCount = 0;
 void canSetup()
 {
     if (canStarted) return;
+    if (steerMotor)                                     // direct drive motor: the bus is the motor's, it sends
+    {
+        canBus.begin();
+        canStarted = true;
+        motorSetup();
+        return;
+    }
     if (!canSasa && !canBtnMode) { Serial.println("CAN3: off (SASA sensor and engage button off on the web page)"); return; }
     canBus.begin();
     canBus.setBaudRate(250000, LISTEN_ONLY);
@@ -131,10 +140,12 @@ void canLoop()
         canLastExt = m.flags.extended;
         canLastLen = m.len;
         memcpy(canLastBuf, m.buf, sizeof(canLastBuf));
+        if (steerMotor) { motorFrame(m); continue; }
         if (m.len < 4) continue;
         if (canSasa && (m.id == CAN_SASA_ID_EXT || m.id == CAN_SASA_ID_STD)) canSasaFrame(m);
         else if (canBtnMode && m.id == CAN_BTN_ID) canBtnFrame(m);
     }
+    if (steerMotor) motorLoop();
 }
 
 // The CAN part of /api/status

@@ -15,7 +15,7 @@
 #define FW_NAME    "Autosteer_gps_teensy_v4_1"
 #define FW_VERSION "02.11.2026 web"
 
-// Board setup from the web page (zBoard.ino), kept in the EEPROM (200 = magic, 201-209 = this).
+// Board setup from the web page (zBoard.ino), kept in the EEPROM (200 = magic, 201-210 = this).
 // Serial ports: BOARD_PORT_AUTO = detected at start-up as before, BOARD_PORT_NONE = not used, 1-8 = SerialN.
 #define BOARD_PORT_AUTO 0xFF
 #define BOARD_PORT_NONE 0
@@ -30,6 +30,7 @@ struct BoardCfg
     uint8_t remote;     // 1 = the remote input is a pulse sensor: pulses / s sent as the pressure sensor value
     uint8_t sasa;       // 1 = SASA steering wheel sensor on the CAN bus: its speed is the pressure sensor value
     uint8_t canBtn;     // CNH engage button on the CAN bus: 0 off, 1 armrest button, 2 hydraulic joystick up, 3 both
+    uint8_t motor;      // steering: 0 hydraulic valve / PWM driver, direct drive motor on the CAN bus 1 Keya, 2 Allynav, 3 FJD
 };
 
 // TM171 settings form from the web page (TM171.ino, zWeb.ino)

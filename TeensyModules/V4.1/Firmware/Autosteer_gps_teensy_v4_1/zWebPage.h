@@ -7,8 +7,9 @@
 */
 // One self-contained HTML file, no internet needed, kept in flash (PROGMEM). Dark, or light when the
 // device asks for it; the header button switches and this browser remembers it.
-// Tabs: Status (steering, AgOpenGPS, GPS / dual, IMU, hydraulics, module), Setup (serial ports, John Deere FEMA
-// input, remote pulse sensor, CAN bus SASA sensor and CNH engage button), GNSS (commands to the receiver and its
+// Tabs: Status (steering, AgOpenGPS, GPS / dual, IMU, hydraulics, module), Setup (serial ports, steering: hydraulic
+// or a Keya / Allynav / FJD motor, John Deere FEMA input, remote pulse sensor, CAN bus SASA sensor and CNH engage
+// button), GNSS (commands to the receiver and its
 // answers), IMU (IMU choice, TM171 settings and calibrations), Firmware (update from a .hex file, restart),
 // Messages (the webLog lines).
 #ifndef ZWEBPAGE_H
@@ -164,6 +165,13 @@ input[type=text]{font:inherit;font-family:var(--mono);padding:7px 9px;border:1px
  <p class="note">Kept in the EEPROM; the Teensy restarts to take them.</p>
 </div>
 <div class="grid">
+ <div class="card"><h2>Steering</h2>
+  <div class="swrow"><span id="swHyd">Hydraulic valve / PWM driver</span><label class="switch"><input type="checkbox" id="motorSw" data-lock="e"><span class="knob"></span></label><span id="swDd">Direct drive motor</span></div>
+  <label class="opt hidden" id="motorTypeR"><span>Motor<small>On the CAN bus (CAN3). Keya and Allynav: the bit rate is found by itself (250, 500, 125, 1000 kbit/s). FJD: 1000 kbit/s.</small></span><select id="motorType" data-lock="e"><option value="1">Keya</option><option value="2">Allynav</option><option value="3">FJD</option></select></label>
+  <p class="note">Hydraulic: the PWM outputs (Cytron, IBT2 or Danfoss, as set in AgOpenGPS) and the read only CAN inputs. Direct drive: the steering goes to the motor over the CAN bus, which is then the motor's: no SASA sensor, no CNH engage button. Current kickout: the higher of the motor's own current (Keya, Allynav; amps × 20: 100 % = 12.75 A) and the current sensor input. Kept in the EEPROM; the Teensy restarts to take it, only with autosteer off.</p>
+  <div class="row"><button class="act" type="button" id="mSave" data-lock="e" data-off="1" disabled>Save and restart</button><span id="mMsg" class="note"></span></div>
+  <dl id="mStat" class="hidden"><dt>Motor</dt><dd id="mFound">–</dd><div class="r hidden" id="mAmpR"><dt>Motor current</dt><dd id="mAmp">–</dd></div><div class="r hidden" id="mStateR"><dt>Motor state</dt><dd id="mState">–</dd></div></dl>
+ </div>
  <div class="card"><h2>Pressure sensor input</h2>
   <div class="swrow"><span id="swAna">Analog pressure sensor</span><label class="switch"><input type="checkbox" id="femaSw" data-lock="e"><span class="knob"></span></label><span id="swFema">John Deere FEMA valve</span></div>
   <p class="note">The pressure sensor input (A10). FEMA: the valve's PWM signal is read and autosteer kicks out when the wheel is turned by hand. Either way the pressure sensor must be on in AgOpenGPS; its kickout value is the threshold. Saved and taken at once, only with autosteer off.</p>
@@ -178,6 +186,7 @@ input[type=text]{font:inherit;font-family:var(--mono);padding:7px 9px;border:1px
  </div>
  <div class="card"><h2>CAN bus (read only)</h2>
   <p class="note">CAN3 (Teensy pins 30 / 31, the board's CAN connector), 250 kbit/s, listen only: the Teensy sends nothing on the bus. Started once one of these is on. Saved and taken at once, only with autosteer off.</p>
+  <p id="canDdNote" class="note warn hidden"></p>
   <div class="swrow"><span id="swSasaOff">Off</span><label class="switch"><input type="checkbox" id="sasaSw" data-lock="e"><span class="knob"></span></label><span id="swSasa">SASA steering wheel sensor</span></div>
   <p class="note">Frames 0x0CFF104D or 0x301. The steering wheel speed is sent to AgOpenGPS as the pressure sensor value, in place of the pressure sensor input, and autosteer kicks out at the pressure sensor's kickout value. The pressure sensor must be on in AgOpenGPS. Not together with the remote pulse sensor.</p>
   <label class="opt"><span>CNH engage button<small>Frame 0x14FF7706. Turns autosteer on and off like a second steer button: Steer button must be selected in AgOpenGPS.</small></span><select id="canBtn" data-lock="e"><option value="0">off</option><option value="1">armrest button</option><option value="2">hydraulic joystick up</option><option value="3">both</option></select></label>
@@ -344,9 +353,10 @@ function render(s){
  const i=s.imu,g=s.gps,st=s.steer,p=s.ports;
  set("hdr",s.ver+" · GNSS "+pn(p.gnss)+" · IMU "+(i.type||"none")+" · "+s.ip);
  const al=[];
- if(s.engaged)al.push("Autosteer is engaged: serial ports, FEMA, remote and CAN inputs, GNSS commands, IMU choice, TM171 writes and calibration, restart and firmware update are locked.");
+ if(s.engaged)al.push("Autosteer is engaged: serial ports, steering, FEMA, remote and CAN inputs, GNSS commands, IMU choice, TM171 writes and calibration, restart and firmware update are locked.");
  else if(s.moving)al.push("The tractor is moving ("+fx(s.kmh,1)+" km/h): the firmware update and the gyro / new install calibrations are locked.");
  if(!st.ads)al.push("No ADS1115 found at start-up: the module runs as GPS only, without steering.");
+ const mo=s.motor||{};if(mo.type&&(!mo.found||mo.ago>500))al.push(mo.name+" motor: no data on the CAN bus (CAN3)"+(mo.found?".":", trying "+mo.kbps+" kbit/s."));
  if(g.pass)al.push("u-blox set-up through USB is running (!AOGR): the GPS data go to USB, not to AgIO.");
  if(i.set&&i.set.noWire)al.push("TM171 does not answer: wire Teensy TX"+p.imu+" (pin "+p.imuTx+") to the TM171 RXD to use its settings and calibration. Roll and heading still work.");
  renderAlerts(al);
@@ -377,6 +387,7 @@ function render(s){
  set("mIp",s.ip+" / "+(s.link?"link up":"no link"));set("mCpu",fx(s.cpuC,1)+" °C");
  set("fRun",s.ver+", built "+s.built);set("fWeb",s.web.req+" / "+s.web.err+" / "+s.web.drop);
  renderKick(st);
+ renderMotor(s);
  renderCan(s);
  renderImu(s);
  cfgUi();
@@ -449,10 +460,38 @@ $("remoteSw").addEventListener("change",async()=>{
  }catch(e){set("remoteMsg","Cannot reach the module.","note bad");sw.checked=!on;}
  delete sw.dataset.busy;pollStatus();});
 
+// ---- Setup: steering, hydraulic or a direct drive motor (zMotor.ino)
+const MOTORS={1:"Keya",2:"Allynav",3:"FJD"};
+let mDirty=false;
+function motorSel(){return $("motorSw").checked?+$("motorType").value:0;}
+function motorUi(){const dd=$("motorSw").checked;vis("motorTypeR",dd);
+ $("swHyd").className=dd?"":"on";$("swDd").className=dd?"on":"";
+ const ch=!!lastS&&!!lastS.motor&&motorSel()!==lastS.motor.type,b=$("mSave");
+ b.dataset.off=ch?"":"1";b.disabled=!ch||b.dataset.locked==="1";}
+function renderMotor(s){const m=s.motor||{type:0};
+ if(!mDirty){$("motorSw").checked=m.type>0;if(m.type>0)$("motorType").value=String(m.type);}
+ motorUi();vis("mStat",m.type>0);if(!m.type)return;
+ const ok=m.found&&m.ago>=0&&m.ago<=500;
+ pill("mFound",ok?m.name+", "+m.kbps+" kbit/s":m.found?"no data for "+ago(Math.round(m.ago/1000)):"no data yet"+(m.type===3?"":", trying "+m.kbps+" kbit/s"),ok?"ok":"bad");
+ vis("mAmpR",m.amps!==undefined);
+ if(m.amps!==undefined)set("mAmp",fx(m.amps,1)+" A, peak "+fx(m.peak,1)+" A (5 s) – kickout value "+m.kick+" ("+Math.round(m.kick/2.55)+" %)");
+ vis("mStateR",!!m.state);if(m.state)set("mState",m.state);}
+$("motorSw").addEventListener("change",()=>{mDirty=true;motorUi();set("mMsg","");});
+$("motorType").addEventListener("change",()=>{mDirty=true;motorUi();set("mMsg","");});
+$("mSave").addEventListener("click",async()=>{
+ const v=motorSel(),nm=v?MOTORS[v]+" direct drive motor":"hydraulic valve / PWM driver";
+ if(!confirm("Steering: "+nm+"?\n\nThe Teensy restarts to take it (a few seconds)."))return;
+ try{const j=await post("/api/config","motor="+v);
+  if(!j.ok){set("mMsg","Not saved: "+j.error,"note bad");return;}
+  set("mMsg",j.restart?"Saved. The Teensy is restarting…":"Nothing changed.","note ok");if(j.restart)waitingBoot=true;
+ }catch(e){set("mMsg","Cannot reach the module.","note bad");}});
+
 // ---- Setup: CAN bus, read only: SASA sensor, CNH engage button (zCan.ino)
 const CANBTN={0:"off",1:"armrest button",2:"hydraulic joystick up",3:"both"};
 function renderCan(s){
- const c=s.can||{},sw=$("sasaSw");if(!sw.dataset.busy)sw.checked=!!c.sasa;
+ const c=s.can||{},sw=$("sasaSw"),dd=!!(s.motor&&s.motor.type);if(!sw.dataset.busy)sw.checked=!!c.sasa;
+ sw.dataset.off=dd?"1":"";$("canBtn").dataset.off=dd?"1":"";        // the CAN bus is the motor's
+ vis("canDdNote",dd);if(dd)set("canDdNote","CAN3 is used by the "+s.motor.name+" motor (Steering): no SASA sensor or engage button.");
  $("swSasaOff").className=c.sasa?"":"on";$("swSasa").className=c.sasa?"on":"";
  const sel=$("canBtn");if(!sel.dataset.busy)sel.value=String(c.btn||0);
  if(c.on)pill("cFps",c.fps?c.fps+" /s":"none",c.fps?"ok":"bad");else set("cFps","bus off");

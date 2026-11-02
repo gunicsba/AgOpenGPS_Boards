@@ -311,7 +311,7 @@ static void apiStatus()
     j.num("angle", steerAngleActual, 2);
     j.i("wasRaw", helloSteerPosition);
     j.i("pwm", pwmDisplay);
-    j.str("driver", steerConfig.IsDanfoss ? "Danfoss" : steerConfig.CytronDriver ? "Cytron" : "IBT2");
+    j.str("driver", steerMotor ? motorName(steerMotor) : steerConfig.IsDanfoss ? "Danfoss" : steerConfig.CytronDriver ? "Cytron" : "IBT2");
     j.bo("steerSw", steerSwitch == 0);
     j.bo("work", workSwitch == 0);
     j.bo("remote", remoteSwitch == 0);
@@ -328,6 +328,7 @@ static void apiStatus()
     j.close();
 
     canJson(j, now);                             // CAN bus, read only (zCan.ino)
+    motorJson(j, now);                           // direct drive steering motor (zMotor.ino)
 
     j.obj("hyd");
     j.bo("on", HYDRAULIC_ENABLED && hydConfig.enableToolLift);
@@ -450,6 +451,7 @@ static void apiConfigGet()
     j.bo("remote", remoteSensor);
     j.bo("sasa", canSasa);
     j.u("canBtn", canBtnMode);
+    j.u("motor", boardCfg.motor);               // 0 hydraulic, 1 Keya, 2 Allynav, 3 FJD
     j.raw("}");
     webReplyJson(200, webBuf);
 }
@@ -458,10 +460,11 @@ static void apiConfigGet()
 // Teensy restarts. fema (0 / 1, the John Deere FEMA valve on the pressure sensor input), remote (0 / 1, the
 // remote input as a pulse sensor, pulses / s as the pressure sensor value), sasa (0 / 1, the SASA sensor on the
 // CAN bus as the pressure sensor value) and canBtn (0 off, 1 armrest, 2 joystick up, 3 both: the CNH engage
-// button on the CAN bus): saved, taken at once.
+// button on the CAN bus): saved, taken at once. motor (0 hydraulic valve / PWM driver, 1 Keya, 2 Allynav, 3 FJD):
+// saved in the EEPROM and the Teensy restarts.
 static void apiConfigPost(const char* body)
 {
-    long pg, p2, pi, pr, fema, remote, sasa, canBtn;
+    long pg, p2, pi, pr, fema, remote, sasa, canBtn, motor;
     if (!formNum(body, "gnssPort", boardCfg.gnss, 0, 255, pg) || !formNum(body, "gnss2Port", boardCfg.gnss2, 0, 255, p2) ||
         !formNum(body, "imuPort", boardCfg.imu, 0, 255, pi) || !formNum(body, "radioPort", boardCfg.radio, 0, 255, pr))
                                                             { webReplyError(400, "invalid serial port"); return; }
@@ -469,16 +472,20 @@ static void apiConfigPost(const char* body)
     if (!formNum(body, "remote", remoteSensor ? 1 : 0, 0, 1, remote)) { webReplyError(400, "remote: 0 or 1"); return; }
     if (!formNum(body, "sasa", canSasa ? 1 : 0, 0, 1, sasa))          { webReplyError(400, "sasa: 0 or 1"); return; }
     if (!formNum(body, "canBtn", canBtnMode, 0, 3, canBtn))          { webReplyError(400, "canBtn: 0 to 3"); return; }
+    if (!formNum(body, "motor", boardCfg.motor, 0, 3, motor))        { webReplyError(400, "motor: 0 to 3"); return; }
     if (remote == 1 && sasa == 1)
     { webReplyError(409, "the remote pulse sensor and the SASA sensor both give the pressure sensor value - switch the other one off first"); return; }
     BoardCfg c = boardCfg;
     c.gnss = (uint8_t)pg; c.gnss2 = (uint8_t)p2; c.imu = (uint8_t)pi; c.radio = (uint8_t)pr;
     const char* portWhy = boardCfgCheck(c);
     if (portWhy) { webReplyError(400, portWhy); return; }
-    const bool restart = c.gnss != boardCfg.gnss || c.gnss2 != boardCfg.gnss2 || c.imu != boardCfg.imu || c.radio != boardCfg.radio;
+    const bool portsChanged = c.gnss != boardCfg.gnss || c.gnss2 != boardCfg.gnss2 || c.imu != boardCfg.imu || c.radio != boardCfg.radio;
+    const bool motorChanged = (uint8_t)motor != boardCfg.motor;
+    const bool restart = portsChanged || motorChanged;
     const bool femaChanged = (fema == 1) != jdFema;
     const bool remoteChanged = (remote == 1) != remoteSensor;
     const bool canChanged = (sasa == 1) != canSasa || (uint8_t)canBtn != canBtnMode;
+    if (canChanged && steerMotor) { webReplyError(409, "the CAN bus is the steering motor's - no SASA sensor or engage button with it"); return; }
     if ((restart || femaChanged || remoteChanged || canChanged) && webEngaged()) { webReplyError(409, "autosteer is engaged - disengage it first"); return; }
     if (femaChanged)
     {
@@ -499,8 +506,11 @@ static void apiConfigPost(const char* body)
     if (restart)
     {
         boardCfg.gnss = c.gnss; boardCfg.gnss2 = c.gnss2; boardCfg.imu = c.imu; boardCfg.radio = c.radio;
+        boardCfg.motor = (uint8_t)motor;
         boardCfgSave();
-        webLog("[web] serial ports GNSS %ld, dual %ld, TM171 %ld, radio %ld (255 = Auto, 0 = none) saved - restarting", pg, p2, pi, pr);
+        if (portsChanged) webLog("[web] serial ports GNSS %ld, dual %ld, TM171 %ld, radio %ld (255 = Auto, 0 = none) saved", pg, p2, pi, pr);
+        if (motorChanged) webLog("[web] steering: %s saved", motor ? motorName((uint8_t)motor) : "hydraulic valve / PWM driver");
+        webLog("[web] restarting to take it");
         webSteerOff();
         rq.after = WEB_AFTER_RESTART;
     }

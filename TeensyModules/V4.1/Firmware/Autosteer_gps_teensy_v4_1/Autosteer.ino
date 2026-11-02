@@ -70,6 +70,13 @@ uint8_t canBtnMode = 0;                   //engage button: 0 off, 1 armrest butt
 int16_t canSteeringWheelSpeed = 0;        //SASA rotation speed, signed (the sign is the direction)
 bool canEngagePress = false;              //engage button pressed, not yet taken by the steer button code
 
+//Steering (zMotor.ino): 0 = hydraulic valve / PWM driver (Cytron, IBT2, Danfoss as set in AgOpenGPS), else a direct
+//drive motor on the CAN bus: 1 = Keya, 2 = Allynav, 3 = FJD. Set on the web page (Setup tab, zBoard.ino), the
+//Teensy restarts to take it. With a motor the CAN bus is the motor's: no SASA sensor, no CNH engage button.
+uint8_t steerMotor = 0;
+float motorCurrent = 0;                   //the motor's own current, amps * 20 (0 - 255 = 0 - 12.75 A): Keya, Allynav
+float currentSensorReading = 0;           //current sensor input (A17), 0 - 255
+
 #define CONST_180_DIVIDED_BY_PI 57.2957795130823
 
 #include <Wire.h>
@@ -555,8 +562,11 @@ void autosteerLoop()
     {
       sensorSample = (float)analogRead(CURRENT_SENSOR_PIN);
       sensorSample = (abs(775 - sensorSample)) * 0.5;
-      sensorReading = sensorReading * 0.9 + sensorSample * 0.1;    
-      sensorReading = min(sensorReading, 255);
+      currentSensorReading = currentSensorReading * 0.9 + sensorSample * 0.1;
+      currentSensorReading = min(currentSensorReading, 255);
+      sensorReading = currentSensorReading;
+      //Direct drive motor: the higher of the current sensor input and the motor's own current (zMotor.ino)
+      if (steerMotor) sensorReading = max(sensorReading, motorCurrent);
 
       if (sensorReading >= steerConfig.PulseCountMax)
       {
